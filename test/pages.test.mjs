@@ -97,7 +97,7 @@ test("public artifact is allowlisted, has an effective static CSP, and resolves 
     await readFile(join(output, "site.webmanifest"), "utf8"),
   );
   assert.equal(manifest.scope, "./");
-  assert.equal(manifest.start_url, "./");
+  assert.equal(manifest.start_url, "./#/qr");
   assert.equal(manifest.display, "standalone");
   await writeFile(join(output, "server.mjs"), "private server placeholder");
   await assert.rejects(verifyPages(output), /allowlist/);

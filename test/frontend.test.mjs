@@ -12,14 +12,27 @@ import {
 } from "../lib/upstream.mjs";
 import { createDemoRequest } from "../pages/runtime.mjs";
 import { createLiveRequest } from "../pages/live.mjs";
+import {
+  entryPassFromSession,
+  createEntryQr,
+  ENTRY_REFRESH_MS,
+} from "../public/entry-pass.js";
+import { createPassStore } from "../public/pass-store.js";
+import { IDBFactory } from "fake-indexeddb";
 
 const html = await readFile(
   new URL("../public/index.html", import.meta.url),
   "utf8",
 );
-const source = await readFile(
+const sourceModule = await readFile(
   new URL("../public/app.js", import.meta.url),
   "utf8",
+);
+// jsdom evaluates the DOM controller outside its module loader. Bind the real
+// imported helpers below; the production module graph is verified separately.
+const source = sourceModule.replace(
+  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store)\.js["'];\s*/gm,
+  "",
 );
 
 async function fixture(t, options = {}) {
@@ -55,6 +68,17 @@ async function fixture(t, options = {}) {
     virtualConsole,
   });
   const { window } = dom;
+  window.Date.now = now;
+  window.entryPassFromSession = entryPassFromSession;
+  window.createEntryQr = createEntryQr;
+  window.ENTRY_REFRESH_MS = ENTRY_REFRESH_MS;
+  const passDatabase = options.passDatabase || new IDBFactory();
+  window.createPassStore = () =>
+    createPassStore({
+      indexedDB: passDatabase,
+      crypto: globalThis.crypto,
+      now,
+    });
   let cookie = "";
   let activeRequests = 0;
   const networkAttempts = [];
@@ -146,20 +170,32 @@ async function fixture(t, options = {}) {
     app.server.closeAllConnections();
     await new Promise((resolve) => app.server.close(resolve));
   });
-  await until(() => query("#login-form"), "login form");
+  await until(
+    () => (options.savedEntry ? query("#entry-qr svg") : query("#login-form")),
+    options.savedEntry ? "saved entry QR" : "login form",
+  );
   const submit = (form) =>
     form.dispatchEvent(
       new window.Event("submit", { bubbles: true, cancelable: true }),
     );
   const change = (target) =>
     target.dispatchEvent(new window.Event("change", { bubbles: true }));
-  const login = async () => {
+  const login = async ({ stayOnQr = false } = {}) => {
+    window.history.replaceState(
+      null,
+      "",
+      window.location.pathname + window.location.search + "#/qr",
+    );
     if (options.browserLive) {
       query("#username").value = "demo";
       query("#password").value = "demo";
     }
     submit(query("#login-form"));
-    await until(() => all(".facility-card").length === 11, "facility list");
+    await until(() => query("#entry-qr svg"), "entry QR after sign-in");
+    if (!stayOnQr) {
+      query('.mobile-nav a[href="#/facilities"]').click();
+      await until(() => all(".facility-card").length === 11, "facility list");
+    }
   };
   const chooseSlot = async () => {
     all(".facility-card")[0].click();
@@ -195,6 +231,13 @@ async function fixture(t, options = {}) {
     consoleErrors,
     networkAttempts,
     estateRequests,
+    passDatabase,
+    readSavedPass: () =>
+      createPassStore({
+        indexedDB: passDatabase,
+        crypto: globalThis.crypto,
+        now,
+      }).load(),
     writes: () => calls.filter((op) => WRITE_OPERATIONS.has(op)),
   };
 }
@@ -384,6 +427,114 @@ test("live Pages UI signs in and completes the real booking flow against a mocke
   assert.equal(f.window.sessionStorage.length, 0);
   assert.deepEqual(f.networkAttempts, []);
   assert.deepEqual(f.consoleErrors, []);
+});
+
+test("entry QR is the first signed-in screen and a saved pass opens without an estate login", async (t) => {
+  const database = new IDBFactory();
+  const first = await fixture(t, { browserLive: true, passDatabase: database });
+  await first.login({ stayOnQr: true });
+  assert.match(
+    first.query('.mobile-nav [aria-current="page"]').textContent,
+    /My QR/,
+  );
+  assert.equal(first.all(".facility-card").length, 0);
+  assert.equal(first.calls.includes("facilities"), false);
+  assert.match(first.query("#entry-status").textContent, /Ready to scan/);
+  first.query('[data-action="save-entry"]').click();
+  await first.until(() => first.query(".entry-saved"), "pass saved explicitly");
+  first.window.dispatchEvent(new first.window.Event("pagehide"));
+  const reopened = await fixture(t, {
+    browserLive: true,
+    passDatabase: database,
+    savedEntry: true,
+  });
+  assert.equal(reopened.query("#login-form"), null);
+  assert.deepEqual(reopened.calls, []);
+  assert.match(
+    reopened.query(".entry-note").textContent,
+    /Sign in when you want to book/,
+  );
+  reopened.query('.mobile-nav a[href="#/facilities"]').click();
+  await reopened.until(
+    () => reopened.query("#login-form"),
+    "booking still requires authentication",
+  );
+  assert.deepEqual(reopened.calls, []);
+  reopened.query('[data-action="show-entry"]').click();
+  await reopened.until(
+    () => reopened.query("#entry-qr svg"),
+    "back to saved QR",
+  );
+  reopened.query('[data-action="forget-entry"]').click();
+  await reopened.until(
+    () => reopened.query("#login-form"),
+    "saved pass removed",
+  );
+  assert.equal(await reopened.readSavedPass(), null);
+});
+
+test("signing in as a different owner removes the previously saved entry identity", async (t) => {
+  const database = new IDBFactory();
+  const first = await fixture(t, { browserLive: true, passDatabase: database });
+  await first.login({ stayOnQr: true });
+  first.query('[data-action="save-entry"]').click();
+  await first.until(() => first.query(".entry-saved"), "first owner saved");
+  first.window.dispatchEvent(new first.window.Event("pagehide"));
+  const next = await fixture(t, {
+    browserLive: true,
+    passDatabase: database,
+    savedEntry: true,
+    override: async (operation, body, context, demo) => {
+      if (operation === "login") {
+        const response = await demo(operation, body, context);
+        response.ownerLoginOutDTO.id = "another-demo-owner";
+        return response;
+      }
+    },
+  });
+  next.query('.mobile-nav a[href="#/facilities"]').click();
+  await next.until(() => next.query("#login-form"), "second owner login");
+  await next.login({ stayOnQr: true });
+  assert.equal(await next.readSavedPass(), null);
+  assert.equal(next.query(".entry-saved"), null);
+});
+
+test("returning to Sesame shows a fresh QR and preserves an open profile or booking dialog", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  await f.login();
+  let hidden = true;
+  Object.defineProperty(f.window.document, "hidden", { get: () => hidden });
+  f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+  hidden = false;
+  f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+  await f.until(() => f.query("#entry-qr svg"), "QR on return");
+  hidden = true;
+  f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+  assert.equal(
+    f.query("#entry-qr svg"),
+    null,
+    "No stale QR remains while hidden.",
+  );
+  f.query("#modal").open = true;
+  hidden = false;
+  f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+  assert.equal(f.query("#modal").open, true);
+  assert.equal(
+    f.query("#entry-qr svg"),
+    null,
+    "Returning must not discard an active dialog.",
+  );
+});
+
+test("sign-out clears a saved entry pass as well as the live session", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  await f.login({ stayOnQr: true });
+  f.query('[data-action="save-entry"]').click();
+  await f.until(() => f.query(".entry-saved"), "saved pass");
+  f.query('.mobile-nav [data-action="logout"]').click();
+  await f.until(() => f.query("#login-form"), "signed out");
+  assert.equal(await f.readSavedPass(), null);
+  assert.equal(f.query("#entry-qr svg"), null);
 });
 
 test("read-only frontend exposes a review but disables final confirmation", async (t) => {

@@ -19,6 +19,8 @@
     "check": "node --check server.mjs && node --check public/app.js && node --test test/*.test.mjs"
   },
   "devDependencies": {
-    "jsdom": "26.1.0"
+    "fake-indexeddb": "6.2.2",
+    "jsdom": "26.1.0",
+    "jsqr": "1.4.0"
   }
 }

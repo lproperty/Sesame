@@ -1,6 +1,6 @@
 # Sesame · Grand Dunman
 
-A live, mobile-friendly owner portal for signing in, checking availability and booking Grand Dunman facilities.
+A mobile-friendly resident entry QR and live facility-booking portal for Grand Dunman.
 
 **Website:** <https://lproperty.github.io/Sesame/>
 
@@ -8,9 +8,19 @@ A live, mobile-friendly owner portal for signing in, checking availability and b
 
 Open the website and sign in with your existing Intelliving **owner** account. Your browser connects directly to the estate's existing HTTPS API. You do not need to run a local server or arrange another backend. Sesame is an independent resident portal.
 
-## Using the app
+## Open straight to your entry QR
 
-1. Sign in and choose one of your activated owner units.
+Sign in once and **My QR** is the first screen. It displays a large resident entry code, refreshes it every 10 seconds and regenerates it when you return to the app. No facility-list request is needed to show it. An active profile form or booking review is preserved when switching back from Mail or SMS.
+
+For subsequent openings without another login, tap **Keep my entry pass on this device** once. This opt-in saves the minimum entry identity in encrypted browser storage for **seven days**. Anyone able to open Sesame on that device can show the pass, so enable it only on your own device. Your password and booking API token are not saved. Signing out, **Forget saved entry pass**, expiry, or signing in as a different owner removes the saved pass.
+
+The QR uses the resident format found in Intelliving: the authenticated owner ID, an activated owner-unit ID and the current millisecond timestamp. It is generated locally, with no third-party QR service and no door/unlock command. QR decoding and payload compatibility are tested; acceptance by a physical estate reader has not been tested.
+
+The app still needs a connection to load its code. An already loaded QR screen can refresh locally, and saved-pass display does not make an estate API request. A saved entry pass does not sign you in for facility booking.
+
+## Booking facilities
+
+1. Open **Facilities**, sign in if needed, and choose one of your activated owner units.
 2. Complete the profile prompt if the estate reports a missing email or temporary password. Verification codes are sent only when you request them; profile changes require confirmation.
 3. Browse facilities, choose a Singapore-time date and an available session, and read the facility rules and any notice.
 4. Review the price, time, quantity and unit. **Confirm booking** sends the reservation and creates its payment order.
@@ -18,7 +28,7 @@ Open the website and sign in with your existing Intelliving **owner** account. Y
 
 A review does not reserve a slot. The app refreshes availability, prices and rules before confirmation. Double-clicking does not send duplicate reservations. If a submission has an uncertain outcome, check your bookings or the official app before trying again; no automatic retry is sent.
 
-Sign-in lasts only in the current tab. Refreshing or leaving the page requires signing in again. Tokens and passwords are not written to cookies, localStorage, sessionStorage, URLs or public files. Booking records remain on the estate's server. Client-side duplicate guards reset on page reload and cannot replace the estate's server-side controls.
+Booking sign-in lasts only in the current tab. Refreshing or leaving the page requires signing in again for booking; the optional saved entry pass can still display your QR. Tokens and passwords are not written to cookies, localStorage, sessionStorage, IndexedDB, URLs or public files. Booking records remain on the estate's server. Client-side duplicate guards reset on page reload and cannot replace the estate's server-side controls.
 
 ## iPhone
 
@@ -53,22 +63,23 @@ Before a manual publication, run `npm run audit:publication` in the staged Git c
 
 ## Validation
 
-The 49 automated checks cover the browser client, the built module graph, complete booking and payment-instruction flows against a mocked estate API, profile gates, sanitization, session expiry, origin/CSRF protection in the optional Node server, stale reviews, duplicate confirmations and ambiguous failures.
+The 58 automated checks cover QR decoding with an independent decoder, native payload compatibility, first-screen routing, encrypted saved-pass restoration, tamper/expiry rejection, forgetting/sign-out, and account changes. They also cover the browser client, built module graph, booking/payment flows against a mocked estate API, profile gates, sanitization, session expiry, origin/CSRF protection, stale reviews, duplicate confirmations and ambiguous failures.
 
 Authenticated live login, facility details, availability, booking-list reads and CORS response headers were also checked without making reservations, orders, payments, verification-email requests or profile changes. A physical iPhone/browser rendering check was unavailable; DOM tests do not validate native layout or Safari's browser enforcement.
 
 ## Files
 
-| File                                 | Purpose                                                     |
-| ------------------------------------ | ----------------------------------------------------------- |
-| `public/app.js`, `public/styles.css` | Desktop and iPhone interface                                |
-| `pages/entry.js`, `pages/live.mjs`   | Hosted bootstrap, memory-only sessions and live API routing |
-| `lib/portal.mjs`                     | Shared owner, booking and profile workflows                 |
-| `lib/upstream.mjs`                   | Fixed HTTPS estate endpoints and authentication headers     |
-| `lib/model.mjs`                      | IDs, dates, money, availability and response validation     |
-| `pages/runtime.mjs`, `lib/demo.mjs`  | Optional simulator                                          |
-| `server.mjs`                         | Optional loopback development server                        |
-| `scripts/build-pages.mjs`            | Allowlisted, versioned build and verification               |
-| `.github/workflows/pages.yml`        | Validation and restricted deployment                        |
+| File                                           | Purpose                                                     |
+| ---------------------------------------------- | ----------------------------------------------------------- |
+| `public/app.js`, `public/styles.css`           | Desktop and iPhone interface                                |
+| `public/entry-pass.js`, `public/pass-store.js` | Resident QR generation and opt-in encrypted device storage  |
+| `pages/entry.js`, `pages/live.mjs`             | Hosted bootstrap, memory-only sessions and live API routing |
+| `lib/portal.mjs`                               | Shared owner, booking and profile workflows                 |
+| `lib/upstream.mjs`                             | Fixed HTTPS estate endpoints and authentication headers     |
+| `lib/model.mjs`                                | IDs, dates, money, availability and response validation     |
+| `pages/runtime.mjs`, `lib/demo.mjs`            | Optional simulator                                          |
+| `server.mjs`                                   | Optional loopback development server                        |
+| `scripts/build-pages.mjs`                      | Allowlisted, versioned build and verification               |
+| `.github/workflows/pages.yml`                  | Validation and restricted deployment                        |
 
 Photograph, payment QR and icon provenance is recorded in [ASSETS.md](ASSETS.md). The site includes no third-party analytics or fonts.

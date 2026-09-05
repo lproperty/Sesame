@@ -14,6 +14,10 @@ import { createHash } from "node:crypto";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PAGE_FILES = Object.freeze([
   "app.js",
+  "entry-pass.js",
+  "pass-store.js",
+  "vendor/qrcode.mjs",
+  "vendor/QR-LICENSE.txt",
   "styles.css",
   "site.webmanifest",
   "assets/favicon.svg",

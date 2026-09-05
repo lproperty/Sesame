@@ -2,7 +2,7 @@
   "name": "Sesame · Grand Dunman",
   "short_name": "Sesame",
   "description": "Grand Dunman resident portal",
-  "start_url": "./",
+  "start_url": "./#/qr",
   "scope": "./",
   "display": "standalone",
   "background_color": "#f8f7f3",

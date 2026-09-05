@@ -1,3 +1,10 @@
+import {
+  entryPassFromSession,
+  createEntryQr,
+  ENTRY_REFRESH_MS,
+} from "./entry-pass.js";
+import { createPassStore } from "./pass-store.js";
+
 const app = document.querySelector("#app");
 const modal = document.querySelector("#modal");
 const toastRoot = document.querySelector("#toasts");
@@ -37,7 +44,21 @@ const state = {
   modalType: "",
   bookings: [],
   tab: "current",
+  savedPass: null,
+  savingPass: false,
 };
+const passStore = createPassStore();
+const entryRoute = () =>
+  ["", "qr"].includes(location.hash.replace(/^#\/?/, "").split("/")[0]);
+const savedPassReady = () =>
+  state.savedPass && state.savedPass.expiresAt > Date.now();
+const savedPassMatches = (session) =>
+  state.savedPass?.pass.ownerId === session?.user.id &&
+  session.units.some(
+    (unit) =>
+      unit.unitId === state.savedPass.pass.unit.unitId &&
+      unit.projectId === state.savedPass.pass.unit.projectId,
+  );
 const esc = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -110,6 +131,7 @@ const paths = {
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   refresh: '<path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/>',
   user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
+  qr: '<path d="M3 3h6v6H3zM15 3h6v6h-6zM3 15h6v6H3zM15 15h2v2h-2zM19 15h2v6h-6v-2M12 3v3M3 12h3M9 12h6v-3M12 18v3"/>',
 };
 const icon = (name, extra = "") =>
   `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.info}</svg>`;
@@ -218,7 +240,8 @@ async function api(path, data) {
       state.routeGeneration++;
       state.committing = false;
       closeModal();
-      renderLogin(error.message);
+      if (entryRoute() && savedPassReady()) renderEntry();
+      else renderLogin(error.message);
     }
     throw error;
   }
@@ -233,6 +256,7 @@ function toast(message, error = false) {
 }
 
 function renderLogin(message = "") {
+  stopEntry();
   document.title = state.config.staticDemo
     ? "Explore · Sesame"
     : "Sign in · Grand Dunman";
@@ -250,7 +274,7 @@ function renderLogin(message = "") {
       <span class="small-top-label pill${state.config.demo || state.config.readOnly ? " amber" : ""}">${state.config.staticDemo ? "Public demonstration" : state.config.demo ? "Offline demonstration" : state.config.readOnly ? "Read-only session" : "Owner access"}</span>
       <div class="login-form">
         <span class="eyebrow muted">YOUR RESIDENT PORTAL</span>
-        <h2>Welcome home.</h2><p class="intro">${state.config.staticDemo ? "A little preview of life at Grand Dunman." : "Sign in to find a space for your next moment."}</p>
+        <h2>Welcome home.</h2><p class="intro">${state.config.staticDemo ? "A little preview of life at Grand Dunman." : entryRoute() ? "Sign in to show your resident entry QR." : "Sign in to manage your facility bookings."}</p>
         ${state.config.staticDemo ? '<div class="demo-hint"><strong>Explore with sample data.</strong><br>This community-built demonstration is not an official estate service. For real bookings, use Intelliving.</div>' : state.config.demo ? '<div class="demo-hint">Explore with <strong>demo / demo</strong>. Everything in this session is simulated.</div>' : ""}
         ${state.config.staticDemo ? "" : `<div class="account-type">${icon("home")}<div><strong>Unit owner</strong><small>Your existing Intelliving account</small></div>${icon("circleCheck", "check-icon")}</div>`}
         <form id="login-form">
@@ -266,6 +290,7 @@ function renderLogin(message = "") {
         ${state.config.staticDemo ? "" : '<div class="login-help"><span class="muted field-note">Signing in as a unit owner</span><button class="text-button" data-action="login-help">Need help signing in?</button></div>'}
         <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : state.config.browserClient ? "Sign-in goes directly to Intelliving over HTTPS." : "A private connection to your estate account."}</p>
         ${state.config.browserClient ? '<p class="field-note">Your session lasts in this tab only. Refreshing requires a new sign-in. Sesame is an independent resident portal.</p>' : ""}
+        ${savedPassReady() && !state.config.demo ? '<button class="text-button full" data-action="show-entry">Back to my entry QR</button>' : ""}
       </div>
       <div class="login-bottom">Grand Dunman &nbsp; · &nbsp; Spaces for the way you live</div>
     </main>
@@ -277,32 +302,165 @@ function profileBanner() {
   return `<div class="profile-banner"><div><strong>Finish setting up your owner account</strong><p>${state.session.user.needsEmail ? "Add a verified email before you make your first booking." : "Set a new password before you make your first booking."}</p></div><button class="text-button" data-action="profile">Complete profile ${icon("arrow")}</button></div>`;
 }
 
-function renderShell(content, section = "Facilities") {
-  if (!state.session) return;
-  const { user, units, unit } = state.session;
-  const active = section === "My bookings" ? "bookings" : "facilities";
+function renderShell(content, section = "Facilities", cachedPass = null) {
+  const identity =
+    state.session ||
+    (cachedPass
+      ? {
+          user: { name: "Entry pass" },
+          units: [cachedPass.unit],
+          unit: cachedPass.unit,
+        }
+      : null);
+  if (!identity) return;
+  const { user, units, unit } = identity;
+  const authenticated = Boolean(state.session);
+  const active =
+    section === "Entry QR"
+      ? "qr"
+      : section === "My bookings"
+        ? "bookings"
+        : "facilities";
   app.innerHTML = `<div class="app-layout">
-    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/facilities" aria-label="Grand Dunman facilities">${brand()}</a>
+    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/qr" aria-label="My resident entry QR">${brand()}</a>
       <p class="nav-label">YOUR ESTATE</p>
-      <nav><a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
+      <nav><a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>
+      <a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
       <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a></nav>
       <div class="sidebar-spacer"></div>
       <div class="sidebar-tip">${icon("leaf")}<strong>Make yourself at home.</strong><p>Plan ahead for the moments that matter. Explore your estate’s shared spaces.</p></div>
-      <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">Unit owner</p></div><button class="icon-button" data-action="logout" title="Sign out" aria-label="Sign out">${icon("logout")}</button></div>
+      <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">${authenticated ? "Unit owner" : "Saved on this device"}</p></div><button class="icon-button" data-action="${authenticated ? "logout" : "forget-entry"}" title="${authenticated ? "Sign out" : "Forget saved pass"}" aria-label="${authenticated ? "Sign out" : "Forget saved pass"}">${icon("logout")}</button></div>
     </aside>
     <div class="workspace"><header class="topbar"><div class="topbar-crumb"><span>Resident services</span><span class="crumb-divider">/</span><span class="current">${esc(section)}</span></div>
       <div class="topbar-actions"><span class="property-tag">Grand Dunman, Singapore</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
       ${state.config.staticDemo ? '<div class="mode-banner"><strong>PUBLIC DEMO</strong><span>Sample data only. No real bookings or payments.</span></div>' : state.config.demo ? '<div class="mode-banner"><strong>DEMO</strong> An offline preview. All bookings here are simulated.</div>' : state.config.readOnly ? '<div class="mode-banner readonly">Read-only mode · Explore facilities and availability. Submissions are disabled.</div>' : ""}
-      <main class="page" id="main-content" tabindex="-1">${profileBanner()}${content}
+      <main class="page${active === "qr" ? " entry-page" : ""}" id="main-content" tabindex="-1">${active === "qr" ? "" : profileBanner()}${content}
         <footer class="page-footer"><span>GRAND DUNMAN &nbsp; / &nbsp; RESIDENT PORTAL</span><span>${icon("clock")} All facility times are in Singapore time (SGT).</span></footer>
       </main>
     </div>
     <nav class="mobile-nav" aria-label="Mobile resident navigation">
+      <a href="#/qr" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")}<span>My QR</span></a>
       <a href="#/facilities" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")}<span>Facilities</span></a>
       <a href="#/bookings" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")}<span>My bookings</span></a>
-      <button type="button" data-action="logout">${icon("logout")}<span>${state.config.staticDemo ? "Exit demo" : "Sign out"}</span></button>
+      <button type="button" data-action="${authenticated ? "logout" : "forget-entry"}">${icon("logout")}<span>${state.config.staticDemo ? "Exit demo" : authenticated ? "Sign out" : "Forget pass"}</span></button>
     </nav>
   </div>`;
+}
+
+let entryTimer;
+let entryGeneration = 0;
+let entryWakeLock = null;
+function stopEntry() {
+  entryGeneration++;
+  clearTimeout(entryTimer);
+  entryWakeLock?.release().catch(() => {});
+  entryWakeLock = null;
+}
+
+async function keepEntryAwake(generation) {
+  if (!navigator.wakeLock || entryWakeLock) return;
+  try {
+    const lock = await navigator.wakeLock.request("screen");
+    if (generation !== entryGeneration || document.hidden)
+      return void lock.release();
+    entryWakeLock = lock;
+    lock.addEventListener("release", () => {
+      if (entryWakeLock === lock) entryWakeLock = null;
+    });
+  } catch {
+    /* The QR still works when this browser does not offer a wake lock. */
+  }
+}
+
+function renderEntry() {
+  stopEntry();
+  document.title = state.config.demo
+    ? "Entry QR demo · Sesame"
+    : "My entry QR · Sesame";
+  let pass;
+  try {
+    pass = state.session
+      ? entryPassFromSession(state.session)
+      : savedPassReady()
+        ? state.savedPass.pass
+        : null;
+  } catch (error) {
+    renderShell(
+      `<div class="empty-state"><h1>No active owner unit.</h1><p>${esc(error.message)}</p></div>`,
+      "Entry QR",
+    );
+    return;
+  }
+  if (!pass) return renderLogin("Sign in to show your entry QR.");
+  const savedForUnit =
+    savedPassReady() &&
+    state.savedPass.pass.ownerId === pass.ownerId &&
+    state.savedPass.pass.unit.unitId === pass.unit.unitId;
+  renderShell(
+    `<section class="entry-view" aria-labelledby="entry-title">
+    <div class="entry-heading"><p class="eyebrow">MY RESIDENT PASS</p><h1 id="entry-title">Ready for entry.</h1><p>Hold this QR up to the entrance reader.</p></div>
+    <div class="entry-card"><div id="entry-qr" class="entry-qr" aria-label="Resident entry QR"><span class="spinner" aria-label="Preparing entry QR"></span></div>
+      <p class="entry-unit">${esc(unitLabel(pass.unit))}</p><p id="entry-status" class="entry-status" role="status">Preparing a fresh code…</p>
+    </div>
+    <div class="entry-tools"><span id="entry-countdown" class="muted"></span><button class="text-button" data-action="refresh-entry">${icon("refresh")} Refresh QR</button></div>
+    ${state.config.demo ? '<p class="entry-note">Example QR only. This demonstration cannot be used for estate entry.</p>' : savedForUnit ? `<div class="entry-saved">${icon("shield")}<div><strong>Ready when you reopen Sesame</strong><p>Saved on this device until ${esc(new Date(state.savedPass.expiresAt).toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "Asia/Singapore" }))}.</p></div></div><button class="text-button" data-action="forget-entry">Forget saved entry pass</button>` : `<div class="entry-save"><button class="button full" data-action="save-entry" ${!passStore.available || state.savingPass ? "disabled" : ""}>${icon("qr")} Keep my entry pass on this device</button><p class="entry-note">Opens straight to your QR for 7 days. Use only on your own device: anyone who can open Sesame on it can show this pass. Your password and booking login are not saved.</p></div>`}
+    ${!state.session ? '<p class="entry-note">Your entry pass is ready. Sign in when you want to book facilities.</p>' : ""}
+  </section>`,
+    "Entry QR",
+    pass,
+  );
+  const generation = entryGeneration;
+  let updatedAt = 0;
+  const tick = async () => {
+    if (generation !== entryGeneration || document.hidden || !entryRoute())
+      return;
+    try {
+      if (!updatedAt || Date.now() - updatedAt >= ENTRY_REFRESH_MS) {
+        if (state.session) {
+          const session = await api("/api/session");
+          if (generation !== entryGeneration) return;
+          state.session = session;
+          if (state.savedPass && !savedPassMatches(session))
+            await forgetEntry();
+          pass = entryPassFromSession(session);
+        } else {
+          const saved = await passStore.load();
+          if (generation !== entryGeneration) return;
+          state.savedPass = saved;
+          if (!savedPassReady())
+            return renderLogin("Sign in to renew your entry pass.");
+          pass = saved.pass;
+        }
+        if (generation !== entryGeneration || document.hidden) return;
+        const code = createEntryQr(pass, Date.now());
+        document.querySelector("#entry-qr").innerHTML = code.svg;
+        const status = document.querySelector("#entry-status");
+        const message = state.config.demo ? "Sample entry QR" : "Ready to scan";
+        if (status.textContent !== message) status.textContent = message;
+        updatedAt = code.updatedAt;
+        void keepEntryAwake(generation);
+      }
+      const seconds = Math.max(
+        1,
+        Math.ceil((ENTRY_REFRESH_MS - (Date.now() - updatedAt)) / 1000),
+      );
+      document.querySelector("#entry-countdown").textContent =
+        `Refreshes in ${seconds}s`;
+    } catch (error) {
+      if (generation !== entryGeneration) return;
+      document.querySelector("#entry-qr")?.replaceChildren();
+      const status = document.querySelector("#entry-status");
+      if (status) status.textContent = error.message;
+      updatedAt = 0;
+    }
+    if (generation === entryGeneration) entryTimer = setTimeout(tick, 1000);
+  };
+  void tick();
+}
+
+async function forgetEntry() {
+  state.savedPass = null;
+  if (!state.config.demo) await passStore.clear();
 }
 
 function renderLoading(section = "Facilities") {
@@ -533,8 +691,10 @@ async function loadAvailability(date) {
 }
 
 async function route() {
+  stopEntry();
   if (!state.session) {
-    renderLogin();
+    if (entryRoute() && savedPassReady() && !state.config.demo) renderEntry();
+    else renderLogin();
     return;
   }
   const generation = ++state.routeGeneration;
@@ -544,7 +704,16 @@ async function route() {
   resetSelection();
   closeModal();
   const parts = location.hash.replace(/^#\/?/, "").split("/");
-  const section = parts[0] === "bookings" ? "My bookings" : "Facilities";
+  const section = entryRoute()
+    ? "Entry QR"
+    : parts[0] === "bookings"
+      ? "My bookings"
+      : "Facilities";
+  if (entryRoute()) {
+    renderEntry();
+    window.scrollTo(0, 0);
+    return;
+  }
   if (!state.session.unit) {
     renderShell(
       '<section class="empty-state"><div class="empty-icon">' +
@@ -938,6 +1107,18 @@ document.addEventListener("submit", async (event) => {
     try {
       state.session = await api("/api/login", body);
       body.cipher = "";
+      if (!state.config.demo && savedPassReady()) {
+        const saved = state.savedPass.pass;
+        const allowed = state.session.units.some(
+          (unit) =>
+            unit.unitId === saved.unit.unitId &&
+            unit.projectId === saved.unit.projectId,
+        );
+        if (saved.ownerId !== state.session.user.id || !allowed)
+          await forgetEntry();
+        else if (state.session.unit?.unitId !== saved.unit.unitId)
+          state.session = await api("/api/unit", { unitId: saved.unit.unitId });
+      }
       updateConfig(state.session);
       state.filter = "All facilities";
       state.search = "";
@@ -986,6 +1167,7 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   const target = event.target;
   if (target.id === "unit-select") {
+    if (!state.session) return;
     if (state.committing) {
       target.value = state.session.unit.unitId;
       return;
@@ -993,7 +1175,8 @@ document.addEventListener("change", async (event) => {
     target.disabled = true;
     try {
       state.session = await api("/api/unit", { unitId: target.value });
-      if (location.hash !== "#/facilities") location.hash = "#/facilities";
+      const destination = entryRoute() ? "#/qr" : "#/facilities";
+      if (location.hash !== destination) location.hash = destination;
       else await route();
     } catch (error) {
       toast(error.message, true);
@@ -1046,6 +1229,7 @@ document.addEventListener("click", async (event) => {
       );
     } else if (action === "logout") {
       button.disabled = true;
+      await forgetEntry();
       await api("/api/logout", {});
       state.session = null;
       state.facilities = [];
@@ -1054,6 +1238,26 @@ document.addEventListener("click", async (event) => {
       closeModal();
       history.replaceState(null, "", location.pathname + location.search);
       renderLogin();
+    } else if (action === "save-entry") {
+      if (!state.session || state.config.demo || state.savingPass) return;
+      const csrf = state.session.csrfToken;
+      state.savingPass = true;
+      button.disabled = true;
+      try {
+        const saved = await passStore.save(entryPassFromSession(state.session));
+        if (state.session?.csrfToken === csrf) state.savedPass = saved;
+      } finally {
+        state.savingPass = false;
+        if (state.session?.csrfToken === csrf && entryRoute()) renderEntry();
+      }
+    } else if (action === "forget-entry") {
+      button.disabled = true;
+      await forgetEntry();
+      if (state.session) renderEntry();
+      else renderLogin("Saved entry pass removed from this device.");
+    } else if (action === "show-entry" || action === "refresh-entry") {
+      if (location.hash !== "#/qr") location.hash = "#/qr";
+      else await route();
     } else if (action === "reload") await route();
     else if (action === "explore")
       document
@@ -1160,8 +1364,24 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    stopEntry();
+    document.querySelector("#entry-qr")?.replaceChildren();
+    return;
+  }
+  // Returning from Mail/SMS must not discard a profile form or a booking review.
+  if (state.committing || modal.open) return;
+  if (state.session || savedPassReady()) {
+    if (location.hash !== "#/qr") location.hash = "#/qr";
+    else void route();
+  } else if (entryRoute()) void route();
+});
+
 if (pageRequest)
   window.addEventListener("pagehide", () => {
+    stopEntry();
+    state.savedPass = null;
     state.session = null;
     state.bookings = [];
     state.facilities = [];
@@ -1178,13 +1398,21 @@ async function start() {
     app.innerHTML = `<main class="boot-screen" id="main-content"><span class="brand-mark">G</span><h1 class="serif">The portal isn’t available yet.</h1><p>${esc(error.message)}</p><p>Start the local server, then refresh this page.</p></main>`;
     return;
   }
+  if (!state.config.demo) {
+    try {
+      state.savedPass = await passStore.load();
+    } catch {
+      state.savedPass = null;
+    }
+  }
   try {
     state.session = await api("/api/session");
     updateConfig(state.session);
+    if (state.savedPass && !savedPassMatches(state.session))
+      await forgetEntry();
   } catch {
     state.session = null;
   }
-  if (state.session) await route();
-  else renderLogin();
+  await route();
 }
 void start();

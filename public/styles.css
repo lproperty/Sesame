@@ -714,6 +714,104 @@ input[type="checkbox"] {
 .mobile-nav {
   display: none;
 }
+.entry-page {
+  max-width: 700px;
+}
+.entry-view {
+  max-width: 420px;
+  margin: 0 auto;
+  text-align: center;
+}
+.entry-heading {
+  margin-bottom: 20px;
+}
+.entry-heading .eyebrow {
+  color: var(--muted);
+  font-size: 10px;
+}
+.entry-heading h1 {
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 34px;
+  line-height: 1.25;
+  margin: 6px 0;
+}
+.entry-heading > p:last-child {
+  color: var(--muted);
+  font-size: 13px;
+}
+.entry-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 8px 30px #25382f08;
+  color: var(--ink);
+  color-scheme: light;
+}
+.entry-qr {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 1;
+  background: #fff;
+  color: #000;
+  forced-color-adjust: none;
+}
+.entry-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  shape-rendering: crispEdges;
+}
+.entry-unit {
+  font-size: 15px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.entry-status {
+  font-size: 13px;
+  color: var(--green);
+  margin-top: 3px;
+}
+.entry-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 5px 0 12px;
+  font-size: 12px;
+}
+.entry-tools .text-button {
+  min-height: 44px;
+}
+.entry-note {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin-top: 10px;
+}
+.entry-saved {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 9px;
+  background: var(--sage);
+  font-size: 12px;
+}
+.entry-saved p {
+  font-size: 11px;
+  margin-top: 3px;
+}
+.entry-page .page-footer {
+  justify-content: center;
+  text-align: center;
+}
+.entry-page .page-footer span:last-child {
+  display: none;
+}
 .page {
   max-width: 1500px;
   margin: 0 auto;
@@ -2451,7 +2549,7 @@ dialog::backdrop {
     inset: auto 0 0;
     z-index: 15;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 6px;
     min-height: calc(
       var(--mobile-nav-height) + env(safe-area-inset-bottom, 0px)
