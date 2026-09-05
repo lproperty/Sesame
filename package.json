@@ -20,7 +20,7 @@
   },
   "devDependencies": {
     "fake-indexeddb": "6.2.2",
-    "jsdom": "26.1.0",
+    "jsdom": "30.0.1",
     "jsqr": "1.4.0"
   }
 }
