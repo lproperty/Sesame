@@ -1,0 +1,14 @@
+node_modules/
+.local/
+dist/
+test-results/
+.env
+.env.*
+!.env.example
+temp-creds
+temp-creds.*
+*.log
+*.pem
+*.key
+.DS_Store
+Thumbs.db

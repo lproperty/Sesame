@@ -1,0 +1,1165 @@
+const app = document.querySelector("#app");
+const modal = document.querySelector("#modal");
+const toastRoot = document.querySelector("#toasts");
+const demoRequest = globalThis.sesameDemoRequest;
+delete globalThis.sesameDemoRequest;
+const assetUrl = (path) =>
+  new URL(path.replace(/^\//, ""), new URL("./", location.href)).pathname;
+const state = {
+  config: {},
+  session: null,
+  facilities: [],
+  filter: "All facilities",
+  search: "",
+  detail: null,
+  date: "",
+  weekStart: "",
+  slots: [],
+  selectedSlot: null,
+  quantity: 1,
+  rulesAccepted: false,
+  noticeAccepted: false,
+  availabilityError: "",
+  availabilityCheckedAt: "",
+  inspectionGeneration: 0,
+  slotsLoading: false,
+  routeGeneration: 0,
+  availabilityGeneration: 0,
+  previewLoading: false,
+  committing: false,
+  preview: null,
+  modalType: "",
+  bookings: [],
+  tab: "current",
+};
+const esc = (value) =>
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        c
+      ],
+  );
+const money = (value) =>
+  value == null
+    ? "See available times"
+    : "S$" +
+      new Intl.NumberFormat("en-SG", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }).format(value / 100);
+const unitLabel = (unit) =>
+  unit
+    ? [unit.buildingName, unit.unitName].filter(Boolean).join(" · ")
+    : "No active unit";
+const profileIncomplete = () =>
+  state.session?.user.needsEmail || state.session?.user.needsPasswordChange;
+const updateConfig = (session) => {
+  for (const key of ["today", "lastDate", "timeZone", "demo", "readOnly"])
+    state.config[key] = session[key];
+};
+const addDays = (date, n) => {
+  const d = new Date(date + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const dateFormat = (date, options = {}) => {
+  if (!date || !Number.isFinite(Date.parse(date))) return "Date unavailable";
+  return new Intl.DateTimeFormat("en-SG", {
+    timeZone: "Asia/Singapore",
+    day: "numeric",
+    month: "short",
+    ...options,
+  }).format(new Date(date.slice(0, 10) + "T12:00:00+08:00"));
+};
+const timeRange = (start, end) =>
+  `${String(start || "").slice(0, 5)} – ${String(end || "").slice(0, 5)}`;
+const excerpt = (value) =>
+  String(value || "")
+    .split(/\n\s*\n/)[0]
+    .trim();
+const paths = {
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.3"/><rect x="14" y="3" width="7" height="7" rx="1.3"/><rect x="3" y="14" width="7" height="7" rx="1.3"/><rect x="14" y="14" width="7" height="7" rx="1.3"/>',
+  calendar:
+    '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 15h2M14 15h2M8 18h2"/>',
+  calendarCheck:
+    '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 11h18M8 16l3 3 5-5"/>',
+  arrow: '<path d="M4 12h16M14 6l6 6-6 6"/>',
+  back: '<path d="M20 12H4M10 6l-6 6 6 6"/>',
+  chevron: '<path d="m9 5 7 7-7 7"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+  home: '<path d="m3 10 9-7 9 7M5 9v12h14V9M9 21v-8h6v8"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/>',
+  leaf: '<path d="M20 3C10 3 3 7 4 14c1 7 8 8 12 3 3-4 4-10 4-14ZM3 22 16 9"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  circleCheck: '<circle cx="12" cy="12" r="9"/><path d="m7 12 3 3 7-7"/>',
+  close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  logout: '<path d="M9 4H4v16h5M14 8l4 4-4 4M8 12h13"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',
+  shield:
+    '<path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
+  eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  refresh: '<path d="M20 8a8 8 0 1 0 0 8M20 3v5h-5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21v-2a8 8 0 0 1 16 0v2"/>',
+};
+const icon = (name, extra = "") =>
+  `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.info}</svg>`;
+const brand = () =>
+  '<span class="brand-mark" aria-hidden="true">G</span><span class="brand-name">GRAND DUNMAN<span class="brand-sub">RESIDENT PORTAL</span></span>';
+const image = (src, alt, extra = "") =>
+  `<img src="${esc(!src || src.startsWith("/assets/") ? assetUrl(src || "/assets/estate.jpg") : src)}" alt="${esc(alt)}" ${extra}>`;
+
+// Rebuild estate rich text with an explicit tag allowlist and no attributes.
+// HTML from API responses never enters the live DOM unsanitized.
+function safeRichText(html) {
+  const parsed = new DOMParser().parseFromString(
+    String(html || ""),
+    "text/html",
+  );
+  const container = document.createElement("div");
+  const allowed = new Set([
+    "P",
+    "BR",
+    "UL",
+    "OL",
+    "LI",
+    "STRONG",
+    "B",
+    "EM",
+    "I",
+    "U",
+    "H2",
+    "H3",
+    "H4",
+    "BLOCKQUOTE",
+    "SPAN",
+  ]);
+  const drop = new Set([
+    "SCRIPT",
+    "STYLE",
+    "IFRAME",
+    "OBJECT",
+    "EMBED",
+    "SVG",
+    "MATH",
+    "TEMPLATE",
+    "FORM",
+    "NOSCRIPT",
+  ]);
+  const copy = (node, destination) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      destination.append(document.createTextNode(node.textContent));
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE || drop.has(node.tagName)) return;
+    const next = allowed.has(node.tagName)
+      ? document.createElement(node.tagName.toLowerCase())
+      : document.createDocumentFragment();
+    for (const child of node.childNodes) copy(child, next);
+    destination.append(next);
+  };
+  for (const node of parsed.body.childNodes) copy(node, container);
+  return container.innerHTML;
+}
+
+async function api(path, data) {
+  const headers = { accept: "application/json" };
+  if (data !== undefined) {
+    headers["content-type"] = "application/json";
+    if (state.session) headers["x-csrf-token"] = state.session.csrfToken;
+  }
+  let response;
+  try {
+    response = await (demoRequest || fetch)(path, {
+      method: data === undefined ? "GET" : "POST",
+      headers,
+      credentials: "same-origin",
+      ...(data === undefined ? {} : { body: JSON.stringify(data) }),
+    });
+  } catch {
+    const error = new Error(
+      "Unable to reach the local app. Check that the server is running.",
+    );
+    error.code = "CONNECTION_INTERRUPTED";
+    throw error;
+  }
+  let value;
+  try {
+    value = await response.json();
+  } catch {
+    throw new Error(
+      "The app returned an unexpected response. Please refresh the page.",
+    );
+  }
+  if (!response.ok) {
+    const error = new Error(
+      value.error?.message || "The request could not be completed.",
+    );
+    error.code = value.error?.code;
+    error.details = value.error?.details;
+    if (response.status === 401 && path !== "/api/login" && state.session) {
+      state.session = null;
+      state.routeGeneration++;
+      state.committing = false;
+      closeModal();
+      renderLogin(error.message);
+    }
+    throw error;
+  }
+  return value;
+}
+
+let toastTimer;
+function toast(message, error = false) {
+  clearTimeout(toastTimer);
+  toastRoot.innerHTML = `<div class="toast${error ? " error" : ""}" role="${error ? "alert" : "status"}">${esc(message)}</div>`;
+  toastTimer = setTimeout(() => toastRoot.replaceChildren(), 6000);
+}
+
+function renderLogin(message = "") {
+  document.title = state.config.staticDemo
+    ? "Explore · Sesame"
+    : "Sign in · Grand Dunman";
+  app.innerHTML = `<div class="login-layout">
+    <section class="login-visual" aria-label="Life at Grand Dunman">
+      ${image("/assets/estate.jpg", "The Grand Dunman clubhouse and pool at dusk", 'class="login-photo"')}
+      <div class="brand">${brand()}</div>
+      <div class="login-story"><span class="eyebrow">A little more to come home to</span>
+        <h1>Every day,<br>a little <em>extraordinary.</em></h1>
+        <p>Make the most of the spaces you call home. Your next gathering, game or quiet moment starts here.</p>
+      </div>
+      <div class="login-location">${icon("pin")} Dunman Road, Singapore</div>
+    </section>
+    <main class="login-panel" id="main-content">
+      <span class="small-top-label pill${state.config.demo || state.config.readOnly ? " amber" : ""}">${state.config.staticDemo ? "Public demonstration" : state.config.demo ? "Offline demonstration" : state.config.readOnly ? "Read-only session" : "Owner access"}</span>
+      <div class="login-form">
+        <span class="eyebrow muted">YOUR RESIDENT PORTAL</span>
+        <h2>Welcome home.</h2><p class="intro">${state.config.staticDemo ? "A little preview of life at Grand Dunman." : "Sign in to find a space for your next moment."}</p>
+        ${state.config.staticDemo ? '<div class="demo-hint"><strong>Explore with sample data.</strong><br>This community-built demonstration is not an official estate service. For real bookings, use Intelliving.</div>' : state.config.demo ? '<div class="demo-hint">Explore with <strong>demo / demo</strong>. Everything in this session is simulated.</div>' : ""}
+        ${state.config.staticDemo ? "" : `<div class="account-type">${icon("home")}<div><strong>Unit owner</strong><small>Your existing Intelliving account</small></div>${icon("circleCheck", "check-icon")}</div>`}
+        <form id="login-form">
+          <div id="login-error" class="form-error" role="alert">${esc(message)}</div>
+          ${
+            state.config.staticDemo
+              ? ""
+              : `<label class="form-field"><span>Email, phone or username</span><input name="phoneOrEmail" id="username" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" enterkeyhint="next" required maxlength="200" placeholder="Enter your owner login" ${state.config.demo ? 'value="demo"' : ""}></label>
+          <label class="form-field"><span>Password</span><div class="input-wrap"><input name="cipher" id="password" type="password" autocomplete="current-password" enterkeyhint="go" required maxlength="300" placeholder="Enter your password" ${state.config.demo ? 'value="demo"' : ""}><button type="button" class="icon-button" data-action="toggle-password" aria-label="Show password" aria-pressed="false">${icon("eye")}</button></div></label>`
+          }
+          <button class="button full" type="submit" id="login-submit">${state.config.demo ? "Explore the demo" : "Sign in"} ${icon("arrow")}</button>
+        </form>
+        ${state.config.staticDemo ? "" : '<div class="login-help"><span class="muted field-note">Signing in as a unit owner</span><button class="text-button" data-action="login-help">Need help signing in?</button></div>'}
+        <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : "A private connection to your estate account."}</p>
+      </div>
+      <div class="login-bottom">Grand Dunman &nbsp; · &nbsp; Spaces for the way you live</div>
+    </main>
+  </div>`;
+}
+
+function profileBanner() {
+  if (!profileIncomplete()) return "";
+  return `<div class="profile-banner"><div><strong>Finish setting up your owner account</strong><p>${state.session.user.needsEmail ? "Add a verified email before you make your first booking." : "Set a new password before you make your first booking."}</p></div><button class="text-button" data-action="profile">Complete profile ${icon("arrow")}</button></div>`;
+}
+
+function renderShell(content, section = "Facilities") {
+  if (!state.session) return;
+  const { user, units, unit } = state.session;
+  const active = section === "My bookings" ? "bookings" : "facilities";
+  app.innerHTML = `<div class="app-layout">
+    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/facilities" aria-label="Grand Dunman facilities">${brand()}</a>
+      <p class="nav-label">YOUR ESTATE</p>
+      <nav><a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
+      <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a></nav>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-tip">${icon("leaf")}<strong>Make yourself at home.</strong><p>Plan ahead for the moments that matter. Explore your estate’s shared spaces.</p></div>
+      <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">Unit owner</p></div><button class="icon-button" data-action="logout" title="Sign out" aria-label="Sign out">${icon("logout")}</button></div>
+    </aside>
+    <div class="workspace"><header class="topbar"><div class="topbar-crumb"><span>Resident services</span><span class="crumb-divider">/</span><span class="current">${esc(section)}</span></div>
+      <div class="topbar-actions"><span class="property-tag">Grand Dunman, Singapore</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
+      ${state.config.staticDemo ? '<div class="mode-banner"><strong>PUBLIC DEMO</strong><span>Sample data only. No real bookings or payments.</span></div>' : state.config.demo ? '<div class="mode-banner"><strong>DEMO</strong> An offline preview. All bookings here are simulated.</div>' : state.config.readOnly ? '<div class="mode-banner readonly">Read-only mode · Explore facilities and availability. Submissions are disabled.</div>' : ""}
+      <main class="page" id="main-content" tabindex="-1">${profileBanner()}${content}
+        <footer class="page-footer"><span>GRAND DUNMAN &nbsp; / &nbsp; RESIDENT PORTAL</span><span>${icon("clock")} All facility times are in Singapore time (SGT).</span></footer>
+      </main>
+    </div>
+    <nav class="mobile-nav" aria-label="Mobile resident navigation">
+      <a href="#/facilities" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")}<span>Facilities</span></a>
+      <a href="#/bookings" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")}<span>My bookings</span></a>
+      <button type="button" data-action="logout">${icon("logout")}<span>${state.config.staticDemo ? "Exit demo" : "Sign out"}</span></button>
+    </nav>
+  </div>`;
+}
+
+function renderLoading(section = "Facilities") {
+  renderShell(
+    `<div class="page-heading"><div><h1>${esc(section)}</h1><p>Getting your estate ready…</p></div></div><div class="skeleton skeleton-wide" aria-label="Loading"></div><div class="facility-grid">${'<div class="skeleton skeleton-card"></div>'.repeat(3)}</div>`,
+    section,
+  );
+}
+
+function renderError(error, section = "Facilities") {
+  if (!state.session) return;
+  renderShell(
+    `<div class="error-panel" role="alert"><h2>We couldn’t load this just yet.</h2><p>${esc(error.message)}</p><button class="button" data-action="reload">${icon("refresh")} Try again</button></div>`,
+    section,
+  );
+}
+
+function facilityCards() {
+  const filtered = state.facilities.filter(
+    (f) =>
+      (state.filter === "All facilities" || f.category === state.filter) &&
+      `${f.name} ${f.category}`
+        .toLowerCase()
+        .includes(state.search.toLowerCase()),
+  );
+  if (!filtered.length)
+    return '<div class="slot-empty"><p>No facilities match your search.</p><button class="text-button" data-action="clear-filters">Clear filters</button></div>';
+  return filtered
+    .map(
+      (
+        f,
+      ) => `<a class="facility-card" href="#/facility/${esc(f.id)}" aria-label="View times for ${esc(f.name)}">
+    <div class="facility-image">${image(f.image, f.name, 'loading="lazy"')}<span class="image-label">${esc(f.category)}</span></div>
+    <div class="facility-info"><h3>${esc(f.name)}</h3><p class="facility-excerpt">${esc(excerpt(f.introduction) || "Discover this shared space at Grand Dunman.")}</p>
+      <div class="facility-bottom"><span class="facility-price"><small>Listed rate</small><strong>${esc(money(f.indicativePrice))}</strong></span><span class="view-times">View times ${icon("arrow")}</span></div>
+    </div></a>`,
+    )
+    .join("");
+}
+
+function renderFacilities() {
+  document.title = "Facilities · Grand Dunman";
+  const categories = [
+    "All facilities",
+    ...new Set(state.facilities.map((f) => f.category)),
+  ];
+  renderShell(`<div class="page-heading"><div><h1>Your space, your pace.</h1><p>A place to gather. A moment to unwind. It’s all right here.</p></div><span class="date-caption">${icon("calendar")} ${dateFormat(state.config.today, { weekday: "short", year: "numeric" })}</span></div>
+    <section class="hero" aria-labelledby="hero-title">${image("/assets/estate.jpg", "Grand Dunman clubhouse overlooking the pool")}<div class="hero-copy"><span class="eyebrow">A LIFE WELL LIVED</span><h2 id="hero-title">A space for<br>every occasion.</h2><p>Bring your plans to life, just a few steps from home.</p><button class="button light" data-action="explore">Explore facilities ${icon("arrow")}</button></div><span class="hero-label">${icon("pin")} Grand Dunman</span></section>
+    <section id="facilities-section" aria-labelledby="facilities-title"><div class="facilities-toolbar"><div><h2 id="facilities-title">Find your space <span>${state.facilities.length} facilities</span></h2><p>Choose a facility and find a time that works for you.</p></div><label class="search">${icon("search")}<span class="visually-hidden">Search facilities</span><input id="facility-search" type="search" placeholder="Search facilities" value="${esc(state.search)}" autocomplete="off"></label></div>
+      <div class="filters" aria-label="Filter facilities">${categories.map((c) => `<button class="filter ${state.filter === c ? "active" : ""}" data-action="filter" data-value="${esc(c)}" aria-pressed="${state.filter === c}">${esc(c)}</button>`).join("")}</div>
+      <div class="facility-grid" id="facility-grid">${facilityCards()}</div>
+    </section>`);
+}
+
+function resetSelection() {
+  state.selectedSlot = null;
+  state.quantity = 1;
+  state.rulesAccepted = false;
+  state.noticeAccepted = false;
+  state.preview = null;
+}
+
+function dateStrip() {
+  return Array.from({ length: 7 }, (_, i) => {
+    const date = addDays(state.weekStart, i);
+    const selected = date === state.date;
+    const day = dateFormat(date, { weekday: "short" })
+      .split(",")[0]
+      .split(" ")[0];
+    return `<button class="date-option ${selected ? "selected" : ""}" data-action="date" data-value="${date}" aria-label="${esc(dateFormat(date, { weekday: "long", year: "numeric" }))}" aria-pressed="${selected}" ${date > state.config.lastDate ? "disabled" : ""}><span>${esc(day)}</span><strong>${Number(date.slice(8))}</strong><span>${date === state.config.today ? "Today" : dateFormat(date, { day: undefined, month: "short" })}</span></button>`;
+  }).join("");
+}
+
+function slotMarkup() {
+  if (state.slotsLoading)
+    return '<div class="slot-empty"><span class="spinner" aria-label="Loading time slots"></span></div>';
+  if (state.availabilityError)
+    return `<div class="slot-empty" role="alert"><p>${esc(state.availabilityError)}</p><button class="text-button" data-action="refresh-slots">Try again</button></div>`;
+  if (!state.slots.length)
+    return '<div class="slot-empty">No sessions have been released for this date. Try another day.</div>';
+  return state.slots
+    .map(
+      (slot) =>
+        `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? "Available" : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button><button class="slot-details-button" data-action="slot-details" data-value="${esc(slot.id)}" aria-label="View details for ${esc(timeRange(slot.startTime, slot.endTime))}">View details ${icon("info")}</button></div>`,
+    )
+    .join("");
+}
+
+function summaryMarkup() {
+  const slot = state.selectedSlot;
+  if (!slot)
+    return `<h2>Your booking</h2><div class="summary-placeholder">${icon("calendar")}<strong>A little something to look forward to.</strong><p>Choose an available time to see your booking details here.</p></div><button class="button full" disabled>Choose a time ${icon("arrow")}</button><p class="summary-disclaimer">Nothing is reserved until you confirm.</p>`;
+  const incomplete = profileIncomplete();
+  return `<h2>Your booking</h2><p class="summary-facility">${esc(state.detail.name)}</p><dl>
+    <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(slot.date, { weekday: "short" }))}</dd></div>
+    <div class="summary-row"><dt>Time</dt><dd>${esc(timeRange(slot.startTime, slot.endTime))}</dd></div>
+    <div class="summary-row"><dt>Unit</dt><dd>${esc(unitLabel(state.session.unit))}</dd></div>
+    <div class="summary-row"><dt>Quantity</dt><dd>${slot.maxQuantity > 1 ? `<select id="booking-quantity" aria-label="Booking quantity">${Array.from({ length: slot.maxQuantity }, (_, i) => `<option value="${i + 1}" ${state.quantity === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select>` : "1 session"}</dd></div>
+    </dl><div class="total-row"><span>Total</span><strong>${money(slot.price * state.quantity)}</strong></div><p class="summary-price-note">The estate’s price for this time slot. Review the facility information for fee and deposit details.</p>
+    <div class="rules-acceptance">${state.rulesAccepted ? `${icon("circleCheck")}<span>Facility rules accepted<br><button class="text-button" data-action="rules">Read again</button></span>` : `${icon("info")}<button class="text-button" data-action="rules">Read & accept the facility rules</button>`}</div>
+    ${state.detail.notice.show ? `<div class="notice"><div class="rules-content">${safeRichText(state.detail.notice.text)}</div><label class="check-label"><input type="checkbox" id="notice-accepted" ${state.noticeAccepted ? "checked" : ""}>I acknowledge this facility notice.</label></div>` : ""}
+    <button class="button full" data-action="${incomplete ? "profile" : "preview"}" ${!incomplete && (!state.rulesAccepted || (state.detail.notice.show && !state.noticeAccepted) || state.previewLoading) ? "disabled" : ""}>${state.previewLoading ? "Checking availability…" : incomplete ? "Complete profile to book" : "Review booking"} ${icon("arrow")}</button>
+    <p class="summary-disclaimer">${state.config.readOnly ? "Submissions are disabled in read-only mode." : "Nothing is reserved until you confirm."}</p>`;
+}
+
+function renderDetail() {
+  const f = state.detail;
+  document.title = `${f.name} · Grand Dunman`;
+  renderShell(`<a class="back-link" href="#/facilities">${icon("back")} All facilities</a><div class="detail-heading"><p class="eyebrow">${esc(f.category)}</p><h1>${esc(f.name)}</h1></div>
+    <div class="detail-visual">${image(f.image, f.name)}<div class="detail-description"><span class="eyebrow">SPACE TO MAKE IT YOURS</span><h2>A little closer to home.</h2><p>${esc(excerpt(f.introduction))}</p><div class="detail-meta">${icon("calendar")} Plan up to four weeks ahead</div></div></div>
+    <div class="booking-layout"><div><section class="panel" aria-labelledby="choose-date-title"><div class="panel-title"><h2 id="choose-date-title"><span class="step-number">1</span>Choose a date</h2><label><span class="visually-hidden">Booking date</span><input class="date-input" id="booking-date" type="date" min="${state.config.today}" max="${state.config.lastDate}" value="${state.date}"></label></div>
+      <div class="calendar-nav"><button class="icon-button" data-action="week-prev" aria-label="Previous week" ${state.weekStart <= state.config.today ? "disabled" : ""}>${icon("back")}</button><strong>${esc(dateFormat(state.weekStart, { day: undefined, month: "long", year: "numeric" }))}</strong><button class="icon-button" data-action="week-next" aria-label="Next week" ${addDays(state.weekStart, 7) > state.config.lastDate ? "disabled" : ""}>${icon("arrow")}</button></div>
+      <div class="date-strip">${dateStrip()}</div><div class="slot-heading"><h3>Available times</h3><span>Singapore time · SGT</span></div>
+      ${!state.slotsLoading && state.slots.length && state.slots.every((s) => s.reason === "Unavailable") ? '<div class="not-released">The estate currently marks these times unavailable. Please check another date.</div>' : ""}
+      <div class="slots" id="slots" aria-live="polite">${slotMarkup()}</div><div class="availability-note">${icon("refresh")} Availability is checked again before you confirm.</div>
+    </section>
+    <details class="panel rules-panel"><summary>Facility information ${icon("down")}</summary><div class="introduction-full">${esc(f.introduction || "No additional information has been supplied by the estate.")}</div></details>
+    <details class="panel rules-panel"><summary>Rules & regulations ${icon("down")}</summary><div class="rules-content">${safeRichText(f.regulations) || "<p>No additional rules have been supplied by the estate.</p>"}</div></details>
+    </div><aside class="panel summary-panel" id="booking-summary" aria-label="Your booking summary">${summaryMarkup()}</aside></div>`);
+  const strip = document.querySelector(".date-strip");
+  const selected = strip?.querySelector(".selected");
+  if (selected && strip.scrollWidth > strip.clientWidth)
+    strip.scrollLeft = Math.max(
+      0,
+      selected.offsetLeft - (strip.clientWidth - selected.clientWidth) / 2,
+    );
+}
+
+function renderSummary() {
+  const target = document.querySelector("#booking-summary");
+  if (target) target.innerHTML = summaryMarkup();
+}
+
+const tabNames = {
+  current: "Upcoming",
+  unpaid: "Pending payment",
+  history: "History",
+};
+function renderBookings() {
+  document.title = "My bookings · Grand Dunman";
+  const tab = state.tab;
+  const titles = {
+    current: "Your next moment awaits.",
+    unpaid: "You’re all caught up.",
+    history: "A fresh start.",
+  };
+  const descriptions = {
+    current:
+      "You have no upcoming bookings. Find a space for something to look forward to.",
+    unpaid: "There are no bookings awaiting payment for this unit.",
+    history: "Your past facility bookings will appear here.",
+  };
+  renderShell(
+    `<div class="page-heading"><div><h1>Your bookings.</h1><p>Keep track of the moments you’ve made room for.</p></div><button class="button secondary small" data-action="reload">${icon("refresh")} Refresh</button></div>
+    <nav class="booking-tabs" aria-label="Booking status">${Object.entries(
+      tabNames,
+    )
+      .map(
+        ([key, name]) =>
+          `<a class="booking-tab ${tab === key ? "active" : ""}" href="#/bookings/${key}" ${tab === key ? 'aria-current="page"' : ""}>${name}</a>`,
+      )
+      .join("")}</nav>
+    ${
+      state.bookings.length
+        ? state.bookings
+            .map((b) => {
+              const date = b.startTime.slice(0, 10);
+              const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
+              return `<article class="booking-row"><div class="booking-row-left"><div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div><div><h3>${esc(b.facilityName)}</h3><p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p><p class="booking-reference">Booking ${esc(b.id)}</p></div></div><div class="booking-row-right"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tabNames[tab]}</span><br><button class="text-button" data-action="booking-details" data-value="${esc(b.id)}">View details</button></div></article>`;
+            })
+            .join("")
+        : `<section class="empty-state"><div class="empty-icon">${icon("calendarCheck")}</div><h2>${titles[tab]}</h2><p>${descriptions[tab]}</p><a class="button" href="#/facilities">Explore facilities ${icon("arrow")}</a></section>`
+    }`,
+    "My bookings",
+  );
+}
+
+async function loadAvailability(date) {
+  if (
+    date < state.config.today ||
+    date > state.config.lastDate ||
+    !/^\d{4}-\d{2}-\d{2}$/.test(date)
+  ) {
+    toast("Choose a date within the next four weeks.", true);
+    return;
+  }
+  const generation = ++state.availabilityGeneration;
+  const routeGeneration = state.routeGeneration;
+  const facility = state.detail;
+  state.date = date;
+  state.slotsLoading = true;
+  state.availabilityError = "";
+  state.slots = [];
+  resetSelection();
+  renderDetail();
+  try {
+    const result = await api(
+      `/api/facilities/${encodeURIComponent(facility.id)}/availability?date=${date}`,
+    );
+    if (
+      generation !== state.availabilityGeneration ||
+      routeGeneration !== state.routeGeneration
+    )
+      return;
+    Object.assign(state.config, {
+      today: result.today,
+      lastDate: result.lastDate,
+    });
+    state.slots = result.slots;
+    state.availabilityCheckedAt = result.checkedAt;
+  } catch (error) {
+    if (
+      generation !== state.availabilityGeneration ||
+      routeGeneration !== state.routeGeneration
+    )
+      return;
+    state.availabilityError = error.message;
+  } finally {
+    if (
+      generation === state.availabilityGeneration &&
+      routeGeneration === state.routeGeneration &&
+      state.session
+    ) {
+      state.slotsLoading = false;
+      renderDetail();
+    }
+  }
+}
+
+async function route() {
+  if (!state.session) {
+    renderLogin();
+    return;
+  }
+  const generation = ++state.routeGeneration;
+  state.availabilityGeneration++;
+  state.detail = null;
+  state.previewLoading = false;
+  resetSelection();
+  closeModal();
+  const parts = location.hash.replace(/^#\/?/, "").split("/");
+  const section = parts[0] === "bookings" ? "My bookings" : "Facilities";
+  if (!state.session.unit) {
+    renderShell(
+      '<section class="empty-state"><div class="empty-icon">' +
+        icon("home") +
+        '</div><h2>No active owner unit.</h2><p>This login does not have an activated owner association. Please contact estate management to link your unit.</p><button class="button" data-action="logout">Sign out</button></section>',
+    );
+    return;
+  }
+  renderLoading(section);
+  window.scrollTo(0, 0);
+  try {
+    if (parts[0] === "facility" && parts[1]) {
+      const detail = await api(
+        "/api/facilities/" + encodeURIComponent(parts[1]),
+      );
+      if (generation !== state.routeGeneration) return;
+      state.detail = detail;
+      state.weekStart = state.config.today;
+      await loadAvailability(state.config.today);
+    } else if (parts[0] === "bookings") {
+      state.tab = Object.hasOwn(tabNames, parts[1]) ? parts[1] : "current";
+      const bookings = await api("/api/bookings?tab=" + state.tab);
+      if (generation !== state.routeGeneration) return;
+      state.bookings = bookings;
+      renderBookings();
+    } else {
+      const facilities = await api("/api/facilities");
+      if (generation !== state.routeGeneration) return;
+      state.facilities = facilities;
+      renderFacilities();
+    }
+  } catch (error) {
+    if (generation === state.routeGeneration) renderError(error, section);
+  }
+}
+
+let returnFocus;
+function openModal(type, heading, body, eyebrow = "GRAND DUNMAN") {
+  if (!modal.open) returnFocus = document.activeElement;
+  state.modalType = type;
+  modal.innerHTML = `<header class="modal-head"><div><p class="eyebrow">${esc(eyebrow)}</p><h2 id="modal-title">${esc(heading)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon("close")}</button></header><div class="modal-body">${body}</div>`;
+  if (!modal.open) modal.showModal();
+  document.documentElement.classList.add("modal-open");
+}
+
+function closeModal() {
+  if (state.committing) return;
+  if (modal.open) modal.close();
+  state.modalType = "";
+}
+
+modal.addEventListener("close", () => {
+  if (modal.open) return;
+  document.documentElement.classList.remove("modal-open");
+  state.modalType = "";
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+});
+modal.addEventListener("cancel", (event) => {
+  if (state.committing) event.preventDefault();
+});
+modal.addEventListener("click", (event) => {
+  if (event.target === modal) {
+    const rect = modal.getBoundingClientRect();
+    if (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    )
+      closeModal();
+  }
+});
+
+function showRules() {
+  if (!state.detail) return;
+  openModal(
+    "rules",
+    "A shared space, a little care.",
+    `<p class="modal-copy">Please read the estate’s rules for ${esc(state.detail.name)} before booking.</p><div class="modal-scroll rules-content" id="rules-scroll" tabindex="0" aria-label="Facility rules">${safeRichText(state.detail.regulations) || "<p>The estate has not supplied additional rules for this facility.</p>"}</div><p class="scroll-hint" id="scroll-hint">Read to the end to continue.</p><div class="modal-actions"><button class="button secondary" data-action="close-modal">Go back</button><button class="button" id="accept-rules" data-action="accept-rules" disabled>Accept facility rules ${icon("check")}</button></div>`,
+    "FACILITY RULES",
+  );
+  const scroll = document.querySelector("#rules-scroll");
+  const check = () => {
+    if (scroll.scrollHeight <= scroll.clientHeight + scroll.scrollTop + 6) {
+      document.querySelector("#accept-rules").disabled = false;
+      document.querySelector("#scroll-hint").textContent =
+        "By continuing, you agree to these facility rules.";
+    }
+  };
+  scroll.addEventListener("scroll", check);
+  requestAnimationFrame(check);
+}
+
+async function previewBooking() {
+  if (state.previewLoading || !state.selectedSlot) return;
+  const generation = state.routeGeneration;
+  state.previewLoading = true;
+  renderSummary();
+  try {
+    const preview = await api("/api/bookings/preview", {
+      facilityId: state.detail.id,
+      slotId: state.selectedSlot.id,
+      date: state.date,
+      quantity: state.quantity,
+      rulesAccepted: state.rulesAccepted,
+      noticeAccepted: state.noticeAccepted,
+    });
+    if (generation !== state.routeGeneration) return;
+    state.preview = preview;
+    showReview(preview);
+  } catch (error) {
+    if (generation !== state.routeGeneration) return;
+    if (error.code === "NOTICE_REQUIRED" && error.details?.notice) {
+      state.detail.notice = error.details.notice;
+      state.noticeAccepted = false;
+    }
+    toast(error.message, true);
+    if (["SLOT_UNAVAILABLE", "QUANTITY_UNAVAILABLE"].includes(error.code))
+      await loadAvailability(state.date);
+  } finally {
+    if (generation === state.routeGeneration) {
+      state.previewLoading = false;
+      renderSummary();
+    }
+  }
+}
+
+function reviewDetails(preview) {
+  return `<div class="review-facility">${image(preview.facility.image, preview.facility.name)}<div><h3>${esc(preview.facility.name)}</h3><p>${esc(preview.unit.projectName)} · ${esc(unitLabel(preview.unit))}</p></div></div><dl class="review-details">
+    <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(preview.date, { weekday: "short", year: "numeric" }))}</dd></div>
+    <div class="summary-row"><dt>Time (SGT)</dt><dd>${esc(timeRange(preview.startTime, preview.endTime))}</dd></div>
+    <div class="summary-row"><dt>Quantity</dt><dd>${preview.quantity} ${preview.quantity === 1 ? "session" : "sessions"}</dd></div>
+    <div class="summary-row"><dt>Payment</dt><dd>${esc(preview.paymentMethod)}</dd></div></dl><div class="review-total"><span>Total amount</span><strong>${esc(money(preview.amount))}</strong></div>`;
+}
+
+function showReview(preview) {
+  openModal(
+    "review",
+    "Make a little room.",
+    `<p class="modal-copy">Take a moment to check your booking.</p>${reviewDetails(preview)}
+    <p class="review-note">${state.config.demo ? "This creates a demonstration booking only. No reservation or payment is sent to the estate." : state.config.readOnly ? "This is a read-only preview. Booking submissions are disabled on this server." : "Confirming submits this reservation to Grand Dunman. You’ll receive payment instructions next."}</p>
+    <div class="modal-actions"><button class="button secondary" data-action="close-modal">Go back</button><button class="button" data-action="commit" id="confirm-booking" ${state.config.readOnly ? "disabled" : ""}>${state.config.demo ? "Confirm demo booking" : state.config.readOnly ? "Submission disabled" : "Confirm booking"} ${icon("arrow")}</button></div><p class="expiry-note">Review valid for five minutes. Availability may change.</p>`,
+    "REVIEW YOUR BOOKING",
+  );
+}
+
+async function commitBooking() {
+  if (state.committing || !state.preview || state.config.readOnly) return;
+  state.committing = true;
+  const preview = state.preview;
+  modal.querySelectorAll("button").forEach((button) => {
+    button.disabled = true;
+  });
+  document.querySelector("#confirm-booking").textContent =
+    "Submitting booking…";
+  try {
+    const result = await api("/api/bookings/commit", {
+      previewId: preview.previewId,
+      confirm: true,
+    });
+    state.committing = false;
+    if (state.session) showResult(result);
+  } catch (error) {
+    state.committing = false;
+    if (!state.session) return;
+    if (
+      ["CONNECTION_INTERRUPTED", "INTERNAL_ERROR"].includes(error.code) ||
+      !error.code
+    ) {
+      showResult({
+        ...preview,
+        status: "outcome_unknown",
+        message:
+          "The connection was interrupted while submitting. Your reservation may have reached the estate. Check My bookings or the Intelliving app before trying again.",
+      });
+    } else {
+      openModal(
+        "submission-error",
+        "Let’s check that again.",
+        `<div class="form-error" role="alert">${esc(error.message)}</div><p class="modal-copy">Return to availability to review the current times and rules.</p><button class="button full" data-action="return-availability">Back to availability ${icon("back")}</button>`,
+        "BOOKING NOT COMPLETED",
+      );
+    }
+  }
+}
+
+function bankInstructions() {
+  return `<section class="bank-details"><h3>Pay by bank transfer or PayNow UEN</h3><div class="bank-grid"><dl><dt>Payee</dt><dd>Grand Dunman</dd><dt>UEN</dt><dd>202223759E</dd><dt>UOB account</dt><dd>451-313-387-6</dd></dl>${image("/assets/bank-transfer.jpg", "Grand Dunman PayNow payment QR supplied in the Android app")}</div></section><p class="payment-instructions">Send proof of payment through <strong>E-Forms 13</strong> in the Intelliving app, or email <a href="mailto:admin@granddunman-mgt.com.sg">admin@granddunman-mgt.com.sg</a>. Include your unit and booking reference.</p>`;
+}
+
+function showResult(result) {
+  state.preview = result;
+  const ok = result.status === "payment_pending";
+  openModal(
+    "result",
+    ok
+      ? state.config.demo
+        ? "Your demo booking is ready."
+        : "You’ve made room."
+      : "Your booking needs a check.",
+    `<div class="result-icon">${icon(ok ? "calendarCheck" : "info")}</div><p class="modal-copy">${esc(state.config.demo && ok ? "This reservation exists only in the offline demonstration. No payment is needed." : result.message)}</p>${reviewDetails(result)}
+    ${result.orderNo ? `<span class="result-reference">Order reference: ${esc(result.orderNo)}</span>` : ""}${result.bookingId ? `<span class="result-reference">Booking reference: ${esc(result.bookingId)}</span>` : ""}
+    ${ok && !state.config.demo ? bankInstructions() : ""}
+    ${ok ? '<p class="status-line" id="payment-status" role="status">Payment status: pending</p>' : ""}
+    <div class="modal-actions">${ok ? `<button class="button secondary" data-action="payment-status" data-value="${esc(result.previewId)}">${icon("refresh")} Check payment</button>` : ""}<button class="button" data-action="go-bookings">View my bookings ${icon("arrow")}</button></div>`,
+    ok ? "BOOKING SUBMITTED" : "SUBMISSION STATUS",
+  );
+}
+
+function showBookingDetails(id) {
+  const booking = state.bookings.find((b) => b.id === id);
+  if (!booking) return;
+  if (booking.receipt) {
+    showResult(booking.receipt);
+    const additionalDetails = document.createElement("details");
+    additionalDetails.className = "booking-metadata";
+    additionalDetails.innerHTML = `<summary>More booking details</summary>${ownBookingMetadata(booking)}`;
+    modal.querySelector(".modal-actions").before(additionalDetails);
+    return;
+  }
+  openModal(
+    "booking-details",
+    booking.facilityName,
+    `<p class="modal-copy">${esc(dateFormat(booking.startTime.slice(0, 10), { year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p>${ownBookingMetadata(booking)}${booking.tab === "unpaid" ? '<p class="review-note">Complete or check payment for this existing reservation in the Intelliving app.</p>' : ""}<div class="modal-actions"><button class="button secondary" data-action="close-modal">Close</button></div>`,
+    "YOUR BOOKING",
+  );
+}
+
+function metadataRows(rows) {
+  return `<dl class="inspection-details">${rows.map(([label, value]) => `<div class="summary-row"><dt>${esc(label)}</dt><dd>${esc(value == null || value === "" ? "Not provided" : value)}</dd></div>`).join("")}</dl>`;
+}
+
+function ownBookingMetadata(booking) {
+  return metadataRows([
+    ["Unit", booking.unit ? unitLabel(booking.unit) : null],
+    ["Status", tabNames[booking.tab]],
+    ["Quantity", booking.quantity],
+    [
+      "Amount",
+      money(
+        booking.amount ??
+          (booking.price == null ? null : booking.price * booking.quantity),
+      ),
+    ],
+    ["Booking reference", booking.id],
+    ["Order reference", booking.orderNo],
+    ["Schedule reference", booking.facilityDetailId],
+    ["Booking created (as reported)", booking.createdAt],
+    ["Booking updated (as reported)", booking.updatedAt],
+  ]);
+}
+
+async function showSlotDetails(slotId) {
+  const slot = state.slots.find((candidate) => candidate.id === slotId);
+  if (!slot || !state.detail || !state.session?.unit) return;
+  const generation = ++state.inspectionGeneration;
+  const routeGeneration = state.routeGeneration;
+  const selectedUnit = state.session.unit;
+  const facility = state.detail;
+  const details = slot.details || {};
+  const flagLabel = (value) =>
+    value == null ? "Not provided" : value ? "Yes" : "No";
+  const checkedAt = state.availabilityCheckedAt
+    ? new Date(state.availabilityCheckedAt).toLocaleString("en-SG", {
+        timeZone: "Asia/Singapore",
+        hour12: false,
+      })
+    : null;
+  openModal(
+    "slot-details",
+    "Session details",
+    `<p class="modal-copy">${esc(facility.name)}<br>${esc(dateFormat(slot.date, { weekday: "short", year: "numeric" }))} · ${esc(timeRange(slot.startTime, slot.endTime))} SGT</p>${metadataRows(
+      [
+        ["Availability", slot.enabled ? "Available" : slot.reason],
+        ["Slot rate", money(slot.price)],
+        ["Listed facility rate", money(facility.indicativePrice)],
+        ["Booking capacity", details.capacity],
+        ["Remaining capacity", details.remainingCapacity],
+        ["Capacity unavailable", details.unavailableCapacity],
+        ["Per-booking limit", slot.maxQuantity],
+        ["Booking flag set", flagLabel(details.bookingFlag)],
+        ["Reservations permitted", flagLabel(details.reservationAllowed)],
+        ["Schedule enabled", flagLabel(details.scheduleEnabled)],
+        ["Schedule created (as reported)", details.scheduleCreatedAt],
+        ["Schedule updated (as reported)", details.scheduleUpdatedAt],
+        ["Availability checked (SGT)", checkedAt],
+        ["Schedule reference", slot.id],
+      ],
+    )}<p class="inspection-note">Capacity can include reservations, holds or blocks. Schedule timestamps describe the time slot, not when someone booked it.</p><section class="slot-own-bookings" aria-labelledby="slot-own-bookings-title"><h3 id="slot-own-bookings-title">Your unit at this time</h3><div id="slot-own-bookings" aria-live="polite"><p class="modal-copy">Checking your unit’s bookings…</p></div></section><p class="inspection-note">Other residents’ names and home-unit numbers are not shown.</p><div class="modal-actions"><button class="button secondary" data-action="close-modal">Close</button></div>`,
+    "AVAILABILITY DETAILS",
+  );
+  try {
+    const [current, unpaid] = await Promise.all([
+      api("/api/bookings?tab=current"),
+      api("/api/bookings?tab=unpaid"),
+    ]);
+    if (
+      generation !== state.inspectionGeneration ||
+      routeGeneration !== state.routeGeneration ||
+      state.modalType !== "slot-details" ||
+      !modal.open
+    )
+      return;
+    const matches = [
+      ...new Map(
+        [...current, ...unpaid]
+          .filter(
+            (booking) =>
+              booking.unit?.unitId === selectedUnit.unitId &&
+              booking.facilityId === facility.id &&
+              booking.facilityDetailId === slot.id,
+          )
+          .map((booking) => [booking.id, booking]),
+      ).values(),
+    ];
+    document.querySelector("#slot-own-bookings").innerHTML = matches.length
+      ? matches
+          .map(
+            (booking) =>
+              `<div class="own-slot-booking">${ownBookingMetadata(booking)}</div>`,
+          )
+          .join("")
+      : '<p class="modal-copy">No booking for your unit could be linked to this session. This does not identify who reserved it.</p>';
+  } catch (error) {
+    if (
+      generation !== state.inspectionGeneration ||
+      routeGeneration !== state.routeGeneration ||
+      state.modalType !== "slot-details" ||
+      !modal.open
+    )
+      return;
+    const target = document.querySelector("#slot-own-bookings");
+    if (target)
+      target.innerHTML = `<p class="form-error" role="alert">${esc(error.message)}</p>`;
+  }
+}
+
+function showProfile() {
+  const user = state.session?.user;
+  if (!user || !profileIncomplete()) return;
+  const needsEmail = user.needsEmail;
+  openModal(
+    "profile",
+    needsEmail ? "Complete your owner profile." : "Set your new password.",
+    `<p class="modal-copy">${needsEmail ? "Intelliving requires a verified email and a completed profile before booking." : "Your account uses a temporary password. Verify your email and choose a new password."} This updates your estate login. Sign in again afterwards with your email and new password.</p>
+    ${state.config.readOnly ? '<p class="review-note">Profile updates and verification emails are disabled in read-only mode.</p>' : ""}
+    <form class="profile-form" id="profile-form"><div class="form-error" id="profile-error" role="alert"></div>
+      <label class="form-field"><span>Email address</span><input name="email" type="email" autocomplete="email" value="${esc(user.email)}" required ${!needsEmail ? "readonly" : ""}></label>
+      <label class="form-field"><span>Email verification code</span><div class="code-field"><input name="verification" required maxlength="32" autocomplete="one-time-code" placeholder="Enter the email code"><button type="button" class="button secondary" data-action="send-code" ${state.config.readOnly ? "disabled" : ""}>Send email code</button></div><span class="field-note" id="code-status" role="status"></span></label>
+      ${needsEmail ? `<div class="field-grid"><label class="form-field"><span>Your name</span><input name="username" required maxlength="120" autocomplete="name" value="${esc(user.name)}"></label><label class="form-field"><span>Phone (optional)</span><input name="phone" type="tel" maxlength="40" autocomplete="tel" value="${esc(user.phone)}"></label></div>` : ""}
+      <div class="field-grid"><label class="form-field"><span>New password</span><input name="cipher" type="password" required maxlength="300" autocomplete="new-password"></label><label class="form-field"><span>Confirm new password</span><input name="confirmPassword" type="password" required maxlength="300" autocomplete="new-password"></label></div>
+      <label class="check-label"><input name="confirm" type="checkbox" required>I confirm these changes to my estate account and login.</label>
+      <div class="modal-actions"><button type="button" class="button secondary" data-action="close-modal">Go back</button><button class="button" type="submit" ${state.config.readOnly ? "disabled" : ""}>Update & sign in again</button></div>
+    </form>`,
+    "OWNER ACCOUNT",
+  );
+}
+
+async function sendProfileCode(button) {
+  const form = document.querySelector("#profile-form");
+  const email = form.elements.email;
+  if (!email.reportValidity()) return;
+  button.disabled = true;
+  const status = document.querySelector("#code-status");
+  try {
+    await api("/api/profile/code", { email: email.value });
+    status.textContent = "Verification code sent. Check your email.";
+    setTimeout(() => {
+      if (button.isConnected) button.disabled = false;
+    }, 60_000);
+  } catch (error) {
+    document.querySelector("#profile-error").textContent = error.message;
+    button.disabled = false;
+  }
+}
+
+document.addEventListener("submit", async (event) => {
+  const form = event.target;
+  if (form.id === "login-form") {
+    event.preventDefault();
+    const button = document.querySelector("#login-submit");
+    if (button.disabled) return;
+    const body = state.config.staticDemo
+      ? { phoneOrEmail: "demo", cipher: "demo" }
+      : Object.fromEntries(new FormData(form));
+    button.disabled = true;
+    button.textContent = state.config.staticDemo
+      ? "Opening the demo…"
+      : "Signing in…";
+    document.querySelector("#login-error").textContent = "";
+    try {
+      state.session = await api("/api/login", body);
+      body.cipher = "";
+      updateConfig(state.session);
+      state.filter = "All facilities";
+      state.search = "";
+      await route();
+    } catch (error) {
+      if (document.querySelector("#login-error"))
+        document.querySelector("#login-error").textContent = error.message;
+      if (button.isConnected) {
+        button.disabled = false;
+        button.innerHTML = `${state.config.demo ? "Explore the demo" : "Sign in"} ${icon("arrow")}`;
+      }
+    }
+  } else if (form.id === "profile-form") {
+    event.preventDefault();
+    const button = form.querySelector('button[type="submit"]');
+    if (button.disabled) return;
+    const body = {
+      ...Object.fromEntries(new FormData(form)),
+      confirm: form.elements.confirm.checked,
+    };
+    button.disabled = true;
+    try {
+      await api("/api/profile/complete", body);
+      body.cipher = body.confirmPassword = "";
+      state.session = null;
+      state.routeGeneration++;
+      closeModal();
+      renderLogin(
+        "Your profile was updated. Sign in with your email and new password.",
+      );
+    } catch (error) {
+      if (document.querySelector("#profile-error"))
+        document.querySelector("#profile-error").textContent = error.message;
+      button.disabled = false;
+    }
+  }
+});
+
+document.addEventListener("input", (event) => {
+  if (event.target.id === "facility-search") {
+    state.search = event.target.value;
+    document.querySelector("#facility-grid").innerHTML = facilityCards();
+  }
+});
+
+document.addEventListener("change", async (event) => {
+  const target = event.target;
+  if (target.id === "unit-select") {
+    if (state.committing) {
+      target.value = state.session.unit.unitId;
+      return;
+    }
+    target.disabled = true;
+    try {
+      state.session = await api("/api/unit", { unitId: target.value });
+      if (location.hash !== "#/facilities") location.hash = "#/facilities";
+      else await route();
+    } catch (error) {
+      toast(error.message, true);
+      target.value = state.session?.unit?.unitId || "";
+      target.disabled = false;
+    }
+  } else if (target.id === "booking-date") {
+    if (!target.value || !target.checkValidity()) return;
+    const offset =
+      Math.floor(
+        (Date.parse(target.value) - Date.parse(state.config.today)) /
+          86_400_000 /
+          7,
+      ) * 7;
+    state.weekStart = addDays(state.config.today, offset);
+    await loadAvailability(target.value);
+  } else if (target.id === "booking-quantity") {
+    state.quantity = Number(target.value);
+    renderSummary();
+  } else if (target.id === "notice-accepted") {
+    state.noticeAccepted = target.checked;
+    renderSummary();
+  }
+});
+
+document.addEventListener("click", async (event) => {
+  if (state.committing && event.target.closest('a[href^="#"]')) {
+    event.preventDefault();
+    toast("Please wait for your booking submission to finish.");
+    return;
+  }
+  const button = event.target.closest("[data-action]");
+  if (!button || button.disabled) return;
+  const action = button.dataset.action;
+  try {
+    if (action === "toggle-password") {
+      const input = document.querySelector("#password");
+      input.type = input.type === "password" ? "text" : "password";
+      button.setAttribute(
+        "aria-label",
+        input.type === "password" ? "Show password" : "Hide password",
+      );
+      button.setAttribute("aria-pressed", String(input.type === "text"));
+    } else if (action === "login-help") {
+      openModal(
+        "help",
+        "A little help signing in.",
+        '<p class="modal-copy">Use the same email, phone number or username and password as your Intelliving owner account. The portal always signs in as a unit owner.</p><p class="modal-copy">To reset a forgotten password, use <strong>Forgot Password</strong> in the Intelliving app. Contact estate management if your account or unit needs activation.</p><button class="button full" data-action="close-modal">Back to sign in</button>',
+        "OWNER ACCESS",
+      );
+    } else if (action === "logout") {
+      button.disabled = true;
+      await api("/api/logout", {});
+      state.session = null;
+      state.facilities = [];
+      state.bookings = [];
+      state.routeGeneration++;
+      closeModal();
+      history.replaceState(null, "", location.pathname + location.search);
+      renderLogin();
+    } else if (action === "reload") await route();
+    else if (action === "explore")
+      document
+        .querySelector("#facilities-section")
+        ?.scrollIntoView({ behavior: "smooth" });
+    else if (action === "filter") {
+      state.filter = button.dataset.value;
+      document.querySelectorAll(".filter").forEach((filter) => {
+        const selected = filter.dataset.value === state.filter;
+        filter.classList.toggle("active", selected);
+        filter.setAttribute("aria-pressed", String(selected));
+      });
+      document.querySelector("#facility-grid").innerHTML = facilityCards();
+    } else if (action === "clear-filters") {
+      state.filter = "All facilities";
+      state.search = "";
+      renderFacilities();
+    } else if (action === "date") await loadAvailability(button.dataset.value);
+    else if (action === "week-prev" || action === "week-next") {
+      const next = addDays(state.weekStart, action === "week-prev" ? -7 : 7);
+      if (next >= state.config.today && next <= state.config.lastDate) {
+        state.weekStart = next;
+        renderDetail();
+      }
+    } else if (action === "slot") {
+      const slot = state.slots.find((s) => s.id === button.dataset.value);
+      if (!slot?.enabled) return;
+      state.selectedSlot = slot;
+      state.quantity = 1;
+      state.preview = null;
+      document.querySelector("#slots").innerHTML = slotMarkup();
+      renderSummary();
+    } else if (action === "slot-details")
+      await showSlotDetails(button.dataset.value);
+    else if (action === "refresh-slots") await loadAvailability(state.date);
+    else if (action === "rules") showRules();
+    else if (action === "accept-rules") {
+      state.rulesAccepted = true;
+      closeModal();
+      renderSummary();
+    } else if (action === "close-modal") closeModal();
+    else if (action === "preview") await previewBooking();
+    else if (action === "commit") await commitBooking();
+    else if (action === "return-availability") {
+      closeModal();
+      await loadAvailability(state.date);
+    } else if (action === "go-bookings") {
+      closeModal();
+      const hash = "#/bookings/unpaid";
+      if (location.hash === hash) await route();
+      else location.hash = hash;
+    } else if (action === "payment-status") {
+      button.disabled = true;
+      try {
+        const result = await api(
+          "/api/payments/" + encodeURIComponent(button.dataset.value),
+        );
+        const status = document.querySelector("#payment-status");
+        if (status)
+          status.textContent =
+            result.status === "paid"
+              ? "Payment received."
+              : result.status === "expired"
+                ? "This payment order has expired. Please check your reservation in the Intelliving app."
+                : "Payment is still pending confirmation from the estate.";
+      } finally {
+        button.disabled = false;
+      }
+    } else if (action === "booking-details")
+      showBookingDetails(button.dataset.value);
+    else if (action === "profile") showProfile();
+    else if (action === "send-code") await sendProfileCode(button);
+  } catch (error) {
+    toast(error.message, true);
+    if (button.isConnected) button.disabled = false;
+  }
+});
+
+document.addEventListener(
+  "error",
+  (event) => {
+    if (
+      event.target instanceof HTMLImageElement &&
+      !event.target.src.endsWith("/assets/estate.jpg")
+    )
+      event.target.src = assetUrl("/assets/estate.jpg");
+  },
+  true,
+);
+
+let lastHash = location.hash;
+window.addEventListener("hashchange", () => {
+  if (state.committing) {
+    history.replaceState(null, "", lastHash || "#/facilities");
+    return;
+  }
+  lastHash = location.hash;
+  void route();
+});
+window.addEventListener("beforeunload", (event) => {
+  if (state.committing) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
+async function start() {
+  try {
+    state.config = await api("/api/config");
+  } catch (error) {
+    app.innerHTML = `<main class="boot-screen" id="main-content"><span class="brand-mark">G</span><h1 class="serif">The portal isn’t available yet.</h1><p>${esc(error.message)}</p><p>Start the local server, then refresh this page.</p></main>`;
+    return;
+  }
+  try {
+    state.session = await api("/api/session");
+    updateConfig(state.session);
+  } catch {
+    state.session = null;
+  }
+  if (state.session) await route();
+  else renderLogin();
+}
+void start();

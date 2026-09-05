@@ -1,0 +1,24 @@
+{
+  "name": "grand-dunman-resident-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-friendly Grand Dunman owner portal with a secure static demonstration for GitHub Pages.",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "dev": "node --watch --env-file-if-exists=.env server.mjs",
+    "start:readonly": "node --env-file-if-exists=.env server.mjs --read-only",
+    "demo": "node server.mjs --demo --port=3211",
+    "build:pages": "node scripts/build-pages.mjs",
+    "preview:pages": "node scripts/serve-pages.mjs",
+    "audit:publication": "node scripts/audit-publication.mjs",
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check server.mjs && node --check public/app.js && node --test test/*.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}
