@@ -1,11 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, writeFile, rm } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { join, resolve, sep } from "node:path";
 import { JSDOM } from "jsdom";
 import { buildPages, verifyPages } from "../scripts/build-pages.mjs";
 import { createDemoRequest } from "../pages/runtime.mjs";
+import { createDemoUpstream } from "../lib/demo.mjs";
+import { API_BASE, ROUTES } from "../lib/upstream.mjs";
 
 test("public artifact is allowlisted, has an effective static CSP, and resolves every entry asset under /Sesame/", async (t) => {
   const local = fileURLToPath(new URL("../.local/", import.meta.url));
@@ -15,9 +17,7 @@ test("public artifact is allowlisted, has an effective static CSP, and resolves 
   t.after(() => rm(output, { recursive: true, force: true }));
   const files = await buildPages(output);
   assert.equal(
-    files.some((file) =>
-      /bank-transfer|upstream|server|credentials|\.env|node_modules/.test(file),
-    ),
+    files.some((file) => /server|credentials|\.env|node_modules/.test(file)),
     false,
   );
   const dom = new JSDOM(await readFile(join(output, "index.html"), "utf8"));
@@ -28,7 +28,7 @@ test("public artifact is allowlisted, has an effective static CSP, and resolves 
   ).content;
   for (const directive of [
     "default-src 'none'",
-    "connect-src 'none'",
+    "connect-src https://granddunman.intelliving.app",
     "form-action 'none'",
     "base-uri 'none'",
     "worker-src 'none'",
@@ -52,10 +52,47 @@ test("public artifact is allowlisted, has an effective static CSP, and resolves 
     assert.ok(target.pathname.startsWith("/Sesame/"));
     assert.ok(files.includes(target.pathname.slice("/Sesame/".length)));
   }
+  const version = document.querySelector('meta[name="sesame-build"]').content;
+  assert.match(version, /^[a-f0-9]{16}$/);
   assert.equal(
     document.querySelector("script").getAttribute("src"),
-    "./pages/entry.js",
+    `./pages/entry.js?v=${version}`,
   );
+  const built = await import(
+    pathToFileURL(join(output, "pages/live.mjs")).href
+  );
+  const seed = createDemoUpstream();
+  const client = built.createLiveRequest({
+    fetchImpl: async (url, init) => {
+      const operation = Object.keys(ROUTES).find(
+        (key) => API_BASE + ROUTES[key] === url,
+      );
+      assert.ok(operation);
+      assert.equal(init.credentials, "omit");
+      const headers = new Headers(init.headers);
+      const data = await seed(operation, JSON.parse(init.body), {
+        token: headers.get("token"),
+        unitId: headers.get("unitId"),
+        userType: headers.get("userType"),
+      });
+      return new Response(JSON.stringify({ code: 1200, data }));
+    },
+  });
+  const config = await (await client("/api/config")).json();
+  assert.equal(config.demo, false);
+  assert.equal(config.browserClient, true);
+  assert.equal(
+    (
+      await client("/api/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phoneOrEmail: "demo", cipher: "demo" }),
+      })
+    ).status,
+    200,
+  );
+  assert.equal((await (await client("/api/facilities")).json()).length, 11);
+  client.dispose();
   const manifest = JSON.parse(
     await readFile(join(output, "site.webmanifest"), "utf8"),
   );
@@ -67,9 +104,34 @@ test("public artifact is allowlisted, has an effective static CSP, and resolves 
   await rm(join(output, "server.mjs"));
   await writeFile(
     join(output, "pages/entry.js"),
-    'import "../lib/upstream.mjs";',
+    'import "https://example.com/client.js";',
   );
   await assert.rejects(verifyPages(output), /Unapproved module dependency/);
+});
+
+test("Pages bootstrap refuses sign-in inside a frame or an insecure context", async () => {
+  const entry = await readFile(
+    new URL("../pages/entry.js", import.meta.url),
+    "utf8",
+  );
+  const run = new (Object.getPrototypeOf(async function () {}).constructor)(
+    "window",
+    "document",
+    entry,
+  );
+  for (const framed of [true, false]) {
+    const dom = new JSDOM('<div id="app"></div>');
+    const window = { isSecureContext: framed };
+    window.self = window;
+    window.top = framed ? {} : window;
+    await run(window, dom.window.document);
+    assert.equal(dom.window.document.querySelector("input"), null);
+    assert.match(
+      dom.window.document.body.textContent,
+      framed ? /directly in a browser tab/ : /over HTTPS/,
+    );
+    dom.window.close();
+  }
 });
 
 test("Pages builder refuses to replace source directories or escape the project", async () => {

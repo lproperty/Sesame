@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { dirname, resolve, relative, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PAGE_FILES = Object.freeze([
@@ -25,19 +26,23 @@ export const PAGE_FILES = Object.freeze([
   "assets/games.png",
   "assets/bbq.png",
   "assets/music.png",
+  "assets/bank-transfer.jpg",
   "pages/entry.js",
+  "pages/live.mjs",
   "pages/runtime.mjs",
   "lib/errors.mjs",
   "lib/model.mjs",
   "lib/demo.mjs",
+  "lib/portal.mjs",
+  "lib/upstream.mjs",
 ]);
 export const PAGE_POLICY = [
   "default-src 'none'",
   "script-src 'self'",
   "style-src 'self'",
-  "img-src 'self'",
+  "img-src 'self' https://granddunman.intelliving.app",
   "font-src 'none'",
-  "connect-src 'none'",
+  "connect-src https://granddunman.intelliving.app",
   "worker-src 'none'",
   "manifest-src 'self'",
   "object-src 'none'",
@@ -95,7 +100,7 @@ export async function verifyPages(output = join(root, "dist")) {
   const html = await readFile(join(output, "index.html"), "utf8");
   if (
     !html.includes(`content="${PAGE_POLICY}"`) ||
-    !html.includes('src="./pages/entry.js"')
+    !/src="\.\/pages\/entry\.js\?v=[a-f0-9]{16}"/.test(html)
   )
     throw new Error("The Pages entry point or security policy is missing.");
   for (const file of actual.filter((name) =>
@@ -115,11 +120,18 @@ export async function verifyPages(output = join(root, "dist")) {
       ),
     ];
     for (const [, specifier] of imports) {
-      const dependency = relative(
-        output,
-        resolve(dirname(join(output, file)), specifier),
-      ).replaceAll("\\", "/");
-      if (!specifier.startsWith(".") || !actual.includes(dependency))
+      const dependencyUrl = new URL(
+        specifier,
+        `https://sesame.invalid/${file}`,
+      );
+      const dependency = dependencyUrl.pathname.slice(1);
+      if (
+        !specifier.startsWith(".") ||
+        dependencyUrl.origin !== "https://sesame.invalid" ||
+        dependencyUrl.hash ||
+        !/^\?v=[a-f0-9]{16}$/.test(dependencyUrl.search) ||
+        !actual.includes(dependency)
+      )
         throw new Error(`Unapproved module dependency in ${file}.`);
     }
   }
@@ -146,24 +158,47 @@ export async function buildPages(output = join(root, "dist")) {
     await copyFile(source, destination);
   }
   let html = await readFile(join(root, "public/index.html"), "utf8");
+  const digest = createHash("sha256").update(PAGE_POLICY).update(html);
+  for (const file of PAGE_FILES)
+    digest.update(file).update(await readFile(join(output, file)));
+  const version = digest.digest("hex").slice(0, 16);
+  for (const file of PAGE_FILES.filter((name) => /\.(?:js|mjs)$/.test(name))) {
+    const path = join(output, file);
+    const code = await readFile(path, "utf8");
+    await writeFile(
+      path,
+      code.replace(
+        /((?:\bfrom\s+|\bimport\s*(?:\(\s*)?)["'])(\.[^"']+)(["'])/g,
+        (_, before, specifier, after) =>
+          `${before}${specifier}?v=${version}${after}`,
+      ),
+    );
+  }
   html = html
     .replace(
       '<meta charset="utf-8" />',
-      `<meta charset="utf-8" />\n    <meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}" />`,
+      `<meta charset="utf-8" />\n    <meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}" />\n    <meta name="sesame-build" content="${version}" />`,
     )
     .replace('src="./app.js"', 'src="./pages/entry.js"')
     .replace(
       "Your Grand Dunman owner portal. Explore facilities, choose a time and manage your bookings.",
-      "Sesame: a community-built Grand Dunman facility-booking demo. Sample data only; no real login, bookings or payments.",
+      "Sesame: sign in with your Grand Dunman owner account, check availability and book estate facilities.",
     )
-    .replace("Grand Dunman · Resident portal", "Sesame · Grand Dunman demo");
+    .replace(
+      "Grand Dunman · Resident portal",
+      "Sesame · Grand Dunman resident portal",
+    )
+    .replace(
+      /((?:src|href)=")(\.\/[^"?]+)(")/g,
+      (_, before, path, after) => `${before}${path}?v=${version}${after}`,
+    );
   await writeFile(join(output, "index.html"), html);
   await writeFile(join(output, ".nojekyll"), "");
   await writeFile(
     join(output, "404.html"),
     `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}"><meta name="referrer" content="no-referrer"><title>Page not found · Sesame</title></head>
-<body><main><h1>This page has moved.</h1><p><a href="https://lproperty.github.io/Sesame/">Open the Sesame demonstration</a></p></main></body></html>\n`,
+<body><main><h1>This page has moved.</h1><p><a href="https://lproperty.github.io/Sesame/">Open Sesame</a></p></main></body></html>\n`,
   );
   return verifyPages(output);
 }
@@ -174,6 +209,6 @@ if (
 ) {
   const files = await buildPages();
   console.log(
-    `Built and verified ${files.length} public demo files in dist. No live backend or credentials are included.`,
+    `Built and verified ${files.length} website files in dist. The browser connects directly to the estate API; no credentials are included.`,
   );
 }

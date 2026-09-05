@@ -1,35 +1,42 @@
 # Security and hosting
 
-## GitHub Pages
+## Live architecture
 
-The public website at <https://lproperty.github.io/Sesame/> is a **demonstration**, with synthetic identities and reservations. It is not an official estate service and cannot sign in to a real account, book an estate facility, send verification codes or collect payments.
+The GitHub Pages site at <https://lproperty.github.io/Sesame/> hosts static interface code. The browser uses Grand Dunman's existing HTTPS API for real owner authentication, facilities, reservations, orders and profile actions. No extra backend or local server is required. A simulator is available only with the explicit `?demo=1` option.
 
-- The Pages entry point installs an in-memory simulator before starting the interface. The public welcome screen contains no username or password inputs.
-- The HTML Content Security Policy blocks network API connections (`connect-src 'none'`), form submissions, workers, inline scripts, inline styles, object embeds and base URL changes. Scripts, styles and images load only from the site's own origin.
-- No cookies, localStorage, sessionStorage, service workers, analytics or third-party fonts are used by the demo. Each page load starts a separate simulation; exiting the demo clears its data.
-- The build copies an explicit list of reviewed files. It excludes the real API client, Node server, credentials, environment files, diagnostics, logs, APK research and real payment QR. Verification rejects unexpected files, symlinks, server-only imports and unapproved module dependencies.
-- The public repository contains the local server's source and its estate asset provenance. Public source code must never contain resident credentials, tokens or private records. The publication audit checks tracked paths and common credential patterns; GitHub secret scanning and push protection provide an additional check. These checks do not prove the absence of every possible secret.
+Passwords go directly to the fixed estate API origin. Its token stays inside the browser client's in-memory session and is not included in the UI's session view. Neither passwords nor tokens are saved to cookies, localStorage, sessionStorage, URLs, logs, repository files or build artifacts. Signing out or leaving the page discards the token. The interface and session are cleared before Safari can restore a previous page from its back/forward cache. Refreshing requires signing in again. Browser/password-manager features that a resident chooses to use are separate from app storage.
 
-GitHub Pages serves static files and does not run the Node server. It also does not support setting arbitrary response headers. In particular, `frame-ancestors`, `X-Frame-Options`, HSTS and Permissions Policy cannot be configured with HTML meta tags. This project does not claim that its Pages meta policy supplies those header protections. The public demo contains no sensitive account or payment actions for an embedded page to invoke. HTTPS is enforced through the GitHub Pages setting and verified after deployment.
+All estate requests use explicit authentication headers, `credentials: omit`, `mode: cors`, `cache: no-store`, `referrerPolicy: no-referrer` and `redirect: error`. The adapter has a fixed endpoint allowlist; query parameters cannot select an API origin or proxy destination. The estate currently allows the Pages origin through its CORS responses. Since browser cookies are omitted, wildcard CORS origins do not require credentialed-cookie access. Future estate API or CORS changes can affect the app.
 
-GitHub may retain normal hosting access logs, including visitor IP addresses; see the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+## Browser protections and boundaries
 
-## Deployment
+- The HTML CSP allows API connections only to `https://granddunman.intelliving.app`. Scripts and styles are same-origin, and images are restricted to the site and estate origin. Inline scripts/styles, form navigations, workers, object embeds and base URL changes are blocked.
+- The bootstrap refuses to show sign-in or booking controls inside a frame or an insecure context. GitHub Pages cannot configure custom `frame-ancestors`, `X-Frame-Options`, COOP or Permissions-Policy response headers; the JavaScript guard is not claimed to provide those headers.
+- Sessions expire after two hours of inactivity or twelve hours total. State is per tab, and failed or stale requests cannot replace a newer session.
+- No service worker, third-party analytics or third-party fonts are installed. GitHub may keep normal hosting access logs, including IP addresses; see its [Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
+- API text is escaped. Facility rich text is reconstructed with a small tag allowlist and no attributes. Untrusted scripts, SVG, forms, links and embedded content are removed.
+- Tokens are accessible to the browser's own JavaScript and developer tools. HTTPS and CSP reduce exposure; memory-only storage does not make an XSS-compromised browser safe.
 
-The Pages workflow uses full commit hashes for all GitHub Actions, installs the lockfile without package lifecycle scripts, runs the tests and publication audit, and uploads only the verified `dist` directory. Pull requests run validation without deployment permissions. Only the `main` branch of `lproperty/Sesame` can reach the deployment job. The `github-pages` environment is restricted to that branch.
+**The estate server is the security authority.** It must enforce token validity, unit ownership, pricing, booking quotas and capacity. Frontend validation is not a substitute for server authorization. No claim is made that an untested estate control is secure simply because the interface checks it.
 
-Workflow permissions default to none. The build receives read-only repository access. Only the deployment job receives `pages: write` and `id-token: write`; it uses GitHub's short-lived identity and needs no personal access token or repository secret. Checkout does not persist Git credentials. Dependency and action updates are proposed by Dependabot.
+The client restricts units to activated owner associations, preserves string IDs and integer cents, requires profile completion when reported by the estate, and refreshes the price, availability and terms before final confirmation. Duplicate confirmations in the current client share a single attempt. A timed-out insertion is never automatically retried; a failed order retains the reservation reference. These duplicate guards live in memory and reset on page reload. Check estate booking records after an uncertain result. The frontend cannot guarantee exactly-once submissions across browser crashes or multiple tabs without upstream idempotency support.
 
-## Local live app
+## GitHub hosting guidance
 
-The existing Node server is intended for trusted, local use on `127.0.0.1`. It uses a fixed HTTPS upstream origin with TLS verification, keeps estate tokens on the server, and returns opaque HttpOnly, SameSite session cookies. Mutations require a matching origin and CSRF token. Owner role, activated units, quantity, prices, rules and confirmation come from validated server state. Sessions expire after two hours of inactivity or twelve hours total. No request credentials, upstream responses or resident tokens are logged.
+GitHub's [Pages usage guidance](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits) says Pages sites should not be used for sensitive transactions such as sending passwords. This is distinct from the technical ability to run a static API client. This deployment uses Pages as explicitly requested, with credentials transmitted directly to the estate API and the protections above. A static host intended for authenticated applications would avoid this hosting-policy concern and offer more control over response headers; it would not require a new estate backend.
 
-The `COOKIE_SECURE` option is for a trusted HTTPS setup; turning it on alone does not make the local server a production deployment. Sessions and duplicate-submission guards are in memory and are lost on restart.
+## Publication and deployment
 
-**Live remote use needs separate backend hosting.** Prefer serving the live UI and API together on a trusted HTTPS origin, with secure host-only cookies, proxy/host validation, appropriate rate limits, and durable session and reservation safeguards. Do not expose the loopback server with an arbitrary public tunnel, add a permissive CORS proxy, put real tokens in browser storage, or compile secrets into the Pages artifact. A separate cross-site cookie API is also unreliable on iPhone Safari because of third-party cookie restrictions.
+The build copies and verifies an explicit file allowlist. The Node server, credentials files, environment files, diagnostics, reports, APK research and dependency directories are excluded from the website artifact. The live API adapter and the APK-sourced payment QR are included because the hosted client uses them. No private account data is compiled into either.
 
-## Verification and reporting
+Module and asset URLs include a build fingerprint so new releases do not mix with cached modules. Every module dependency is checked against the allowlist and expected version format. The publication audit checks tracked paths, common credential patterns and, for the approved local publication check, exact local credential values without logging them. Scanners are an additional safeguard, not proof that every conceivable secret has been detected.
 
-Automated tests exercise private-file protection, origin and CSRF enforcement, session expiry, owner/unit restrictions, stale reviews, duplicate confirmations, unknown booking outcomes, rich-text sanitization and the isolated Pages simulation. They never make live estate bookings or profile changes. DOM tests do not constitute a physical iPhone/Safari layout check.
+GitHub Actions are pinned to full commit hashes. The workflow installs locked test dependencies without lifecycle scripts, audits the source, tests it, builds and verifies the artifact, and uploads only `dist`. Pull requests have no deployment permissions. Only `main` in `lproperty/Sesame` may deploy, and the `github-pages` environment permits only that branch. Build access is read-only; only the deployment job receives `pages: write` and `id-token: write`. Checkout does not save Git credentials, and no personal access token or repository secret is embedded in the site.
 
-Report vulnerabilities through GitHub's private vulnerability reporting feature when available. Do not include passwords, tokens or resident records in public issues.
+HTTPS is enforced by GitHub for the default `github.io` domain. Secret scanning, push protection, dependency security updates and private vulnerability reporting are enabled. Dependabot proposes updates to test dependencies and workflow actions.
+
+## Optional local server and reporting
+
+The original Node server remains a loopback-only development option with opaque HttpOnly/SameSite cookies, origin and CSRF checks, and server-held estate tokens. It shares the same booking workflows. It is not required for the hosted site and is not configured as an internet-facing, distributed production backend.
+
+Automated tests use an isolated simulated estate. Live verification was limited to authentication and reads; no real booking, payment, email or profile mutation was performed. Report vulnerabilities through GitHub's private reporting feature. Do not post credentials, tokens or resident records in public issues.

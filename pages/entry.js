@@ -1,6 +1,27 @@
-import { createDemoRequest } from "./runtime.mjs";
-
-// Set once, before app.js starts. The app captures and removes this bootstrap
-// reference. The deployed CSP blocks all API connections as a second boundary.
-globalThis.sesameDemoRequest = createDemoRequest();
-await import("../app.js");
+// This check runs before loading any sign-in or booking controls. GitHub Pages
+// cannot set a frame-ancestors response header, so embedded use fails closed.
+if (window.top !== window.self) {
+  document.querySelector("#app").textContent =
+    "Open Sesame directly in a browser tab to sign in.";
+} else if (!window.isSecureContext) {
+  document.querySelector("#app").textContent =
+    "Open Sesame over HTTPS to sign in securely.";
+} else {
+  const demo = new URL(location.href).searchParams.get("demo") === "1";
+  const request = demo
+    ? (await import("./runtime.mjs")).createDemoRequest()
+    : (await import("./live.mjs")).createLiveRequest();
+  globalThis.sesameRequest = request;
+  // Drop authentication on navigation, including Safari's back/forward cache.
+  window.addEventListener("pagehide", () => {
+    request.dispose?.();
+    document.querySelector("#app").replaceChildren();
+    document.querySelector("#modal").close();
+    document.querySelector("#modal").replaceChildren();
+    document.querySelector("#toasts").replaceChildren();
+  });
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) location.reload();
+  });
+  await import("../app.js");
+}

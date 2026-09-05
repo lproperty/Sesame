@@ -1,48 +1,34 @@
 # Sesame · Grand Dunman
 
-A mobile-friendly resident portal and a public facility-booking demonstration.
+A live, mobile-friendly owner portal for signing in, checking availability and booking Grand Dunman facilities.
 
 **Website:** <https://lproperty.github.io/Sesame/>
 
 **Source:** <https://github.com/lproperty/Sesame>
 
-The GitHub Pages website uses sample residents, units and reservations. It is a community-built demonstration, not an official estate service. It does not accept real account passwords, create estate bookings, send verification emails or collect payments. Open the demo without signing in; refresh the page or exit the demo to clear its simulated data.
+Open the website and sign in with your existing Intelliving **owner** account. Your browser connects directly to the estate's existing HTTPS API. You do not need to run a local server or arrange another backend. Sesame is an independent resident portal.
 
-The full live client is included for trusted local use. GitHub Pages serves static files and cannot run its private Node.js server. Live remote login and booking require separate HTTPS backend hosting; see [SECURITY.md](SECURITY.md).
+## Using the app
+
+1. Sign in and choose one of your activated owner units.
+2. Complete the profile prompt if the estate reports a missing email or temporary password. Verification codes are sent only when you request them; profile changes require confirmation.
+3. Browse facilities, choose a Singapore-time date and an available session, and read the facility rules and any notice.
+4. Review the price, time, quantity and unit. **Confirm booking** sends the reservation and creates its payment order.
+5. Follow the estate's bank-transfer instructions and use **My bookings** to view upcoming, unpaid or historical reservations.
+
+A review does not reserve a slot. The app refreshes availability, prices and rules before confirmation. Double-clicking does not send duplicate reservations. If a submission has an uncertain outcome, check your bookings or the official app before trying again; no automatic retry is sent.
+
+Sign-in lasts only in the current tab. Refreshing or leaving the page requires signing in again. Tokens and passwords are not written to cookies, localStorage, sessionStorage, URLs or public files. Booking records remain on the estate's server. Client-side duplicate guards reset on page reload and cannot replace the estate's server-side controls.
 
 ## iPhone
 
-The interface supports narrow screens, landscape cutouts, Safari's changing viewport and the home indicator. It includes persistent bottom navigation, touch targets of at least 44 pixels, 16px form controls to avoid focus zoom, a scrollable date selector, responsive booking details and native modal dialogs. Pinch zoom remains available and reduced-motion preferences are respected.
+The interface includes bottom navigation, large touch targets, 16px form controls, a scrollable date selector and native dialogs. It accounts for the notch, landscape cutouts, Safari's viewport and the home indicator. Pinch zoom and reduced-motion preferences remain available.
 
-To add it to an iPhone Home Screen, open the website in Safari, tap **Share**, then **Add to Home Screen**. The site includes app icons and a standalone manifest. It needs a network connection to load; it does not install a service worker or cache private account data.
+In Safari, use **Share → Add to Home Screen** for a standalone shortcut. The app requires internet access and installs no service worker. All schedule times are Singapore time.
 
-## Run the live app locally
+## Development
 
-Install Node.js 22 or later and run from the app directory:
-
-```powershell
-npm start
-```
-
-Open **http://127.0.0.1:3210** and use your existing Intelliving **owner** account. There are no runtime package dependencies. Normal startup never reads a credentials file.
-
-For live viewing with estate mutations blocked:
-
-```powershell
-npm run start:readonly
-```
-
-For the original local simulator at **http://127.0.0.1:3211**, using `demo / demo`:
-
-```powershell
-npm run demo
-```
-
-Optional settings are documented in [.env.example](.env.example). The server binds to loopback; it is not configured for public multi-user hosting. Do not change this into a public deployment merely by opening a port.
-
-The live app supports activated owner units, facility search, Singapore-time availability, session details, rules and notice acknowledgement, booking review, explicit confirmation, booking history and the estate's bank-transfer flow. Account completion is required when the estate reports missing email or a temporary password. Email codes and profile changes require explicit user actions. A review does not reserve a slot. Ambiguous submissions are not automatically retried.
-
-## Build the GitHub Pages website
+Node.js 22 or later is required for development:
 
 ```powershell
 npm ci --ignore-scripts
@@ -51,33 +37,38 @@ npm run build:pages
 npm run preview:pages
 ```
 
-Open **http://127.0.0.1:3213/Sesame/**. This preview uses the same repository subpath as GitHub Pages. The build creates and verifies `dist` from an explicit allowlist; it never copies the whole workspace.
+Open **http://127.0.0.1:3213/Sesame/**. The Pages build is live by default. Add `?demo=1` explicitly for the optional simulator; its welcome screen has no credential fields and all its reservations are simulated.
 
-The GitHub workflow validates pull requests. A successful push to `main` builds the demo and deploys it to Pages. Actions are pinned to commit hashes, checkout credentials are not persisted, the deploy job uses a short-lived GitHub identity, and no repository secrets or personal access tokens are embedded in the website. The `github-pages` environment allows deployments only from `main`, and HTTPS is enforced. Dependabot proposes updates for test dependencies and workflow actions.
+The original loopback server remains available with `npm start` at **http://127.0.0.1:3210**. `npm run start:readonly` blocks estate mutations, and `npm run demo` starts the original local simulator at port 3211 using `demo / demo`. These development servers are not needed to use the hosted website. Optional settings are in [.env.example](.env.example).
 
-To audit staged or tracked public source before a manual publication:
+## Publishing and security
 
-```powershell
-npm run audit:publication
-```
+A successful push to `main` runs the tests and publication audit, builds an explicit list of public files, and deploys only `dist`. Pull requests cannot deploy. Actions use pinned commit hashes, minimal permissions and a short-lived GitHub deployment identity. The `github-pages` environment is limited to `main`; HTTPS, secret scanning and push protection are enabled.
+
+The content security policy permits API connections only to the estate's HTTPS origin. Inline scripts, inline styles, form navigations, workers and arbitrary base URLs are blocked. Credentials use explicit authentication headers with browser cookies omitted. The bootstrap refuses embedded or insecure use, and navigating away clears the session. Versioned asset and module URLs prevent a new deployment from mixing with cached code.
+
+The estate API remains the authority for authentication, ownership, capacity, prices and booking quotas. Browser checks improve safety and usability; users can modify their own JavaScript. GitHub Pages also cannot set arbitrary response headers. See [SECURITY.md](SECURITY.md) for these boundaries and GitHub's published guidance about password transactions.
+
+Before a manual publication, run `npm run audit:publication` in the staged Git checkout. Never commit credentials, resident records, local reports, environment files or APK research.
 
 ## Validation
 
-The 42 automated tests cover the live client's origin/CSRF checks, sessions, owner and unit restrictions, authoritative prices, stale reviews, duplicate submissions, ambiguous failures and sanitized rich text. Pages tests exercise sample checkout, mobile navigation, subpath-safe assets and sign-out, no credential fields, no network requests, isolated sessions and the artifact security boundary.
+The 49 automated checks cover the browser client, the built module graph, complete booking and payment-instruction flows against a mocked estate API, profile gates, sanitization, session expiry, origin/CSRF protection in the optional Node server, stale reviews, duplicate confirmations and ambiguous failures.
 
-The tests use synthetic data and an isolated local simulator; they do not make real estate bookings, send verification emails, change passwords or make payments. DOM tests do not render a screen. A connected browser or physical iPhone was unavailable for visual validation during this update.
+Authenticated live login, facility details, availability, booking-list reads and CORS response headers were also checked without making reservations, orders, payments, verification-email requests or profile changes. A physical iPhone/browser rendering check was unavailable; DOM tests do not validate native layout or Safari's browser enforcement.
 
 ## Files
 
-| File                                  | Purpose                                             |
-| ------------------------------------- | --------------------------------------------------- |
-| `public/app.js`, `public/styles.css`  | Shared desktop and iPhone interface                 |
-| `public/site.webmanifest`             | Home Screen setup with repository-relative paths    |
-| `pages/entry.js`, `pages/runtime.mjs` | Isolated browser demonstration                      |
-| `server.mjs`                          | Loopback HTTP server, sessions and security headers |
-| `lib/portal.mjs`, `lib/upstream.mjs`  | Live owner workflows and fixed HTTPS API adapter    |
-| `lib/model.mjs`, `lib/demo.mjs`       | Data normalization and synthetic examples           |
-| `scripts/build-pages.mjs`             | Allowlisted static build and verification           |
-| `.github/workflows/pages.yml`         | Validation and restricted Pages deployment          |
+| File                                 | Purpose                                                     |
+| ------------------------------------ | ----------------------------------------------------------- |
+| `public/app.js`, `public/styles.css` | Desktop and iPhone interface                                |
+| `pages/entry.js`, `pages/live.mjs`   | Hosted bootstrap, memory-only sessions and live API routing |
+| `lib/portal.mjs`                     | Shared owner, booking and profile workflows                 |
+| `lib/upstream.mjs`                   | Fixed HTTPS estate endpoints and authentication headers     |
+| `lib/model.mjs`                      | IDs, dates, money, availability and response validation     |
+| `pages/runtime.mjs`, `lib/demo.mjs`  | Optional simulator                                          |
+| `server.mjs`                         | Optional loopback development server                        |
+| `scripts/build-pages.mjs`            | Allowlisted, versioned build and verification               |
+| `.github/workflows/pages.yml`        | Validation and restricted deployment                        |
 
-Photograph and icon provenance is recorded in [ASSETS.md](ASSETS.md). No third-party analytics, fonts or image-generation services are used. See [SECURITY.md](SECURITY.md) for deployment boundaries, provider limitations and vulnerability reporting.
+Photograph, payment QR and icon provenance is recorded in [ASSETS.md](ASSETS.md). The site includes no third-party analytics or fonts.

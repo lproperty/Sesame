@@ -16,4 +16,4 @@ The photographs and payment QR are estate assets reused from the supplied APK an
 
 The local APK workspace retains the original asset-preparation utility; normal startup does not download assets. Live facility cards use the image URL returned for each facility. Demo facilities reuse the appropriate category photo and use synthetic account, unit, slot and reservation identifiers.
 
-The GitHub Pages artifact contains only the photographs and original app icons. It excludes `bank-transfer.jpg` and never displays real payment instructions. The QR remains part of the local live app source, with its APK provenance recorded above. The demonstration is not an official estate service; the source assets do not imply estate endorsement.
+The live GitHub Pages artifact includes the photographs, original app icons and `bank-transfer.jpg`. Payment instructions appear after a confirmed reservation. The optional `?demo=1` simulator never displays the real payment QR. Sesame is an independent resident portal; these source assets do not imply estate endorsement.

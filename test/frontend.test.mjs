@@ -4,8 +4,14 @@ import { readFile } from "node:fs/promises";
 import { JSDOM, VirtualConsole } from "jsdom";
 import { createApplication } from "../server.mjs";
 import { createDemoUpstream } from "../lib/demo.mjs";
-import { AppError, WRITE_OPERATIONS } from "../lib/upstream.mjs";
+import {
+  AppError,
+  WRITE_OPERATIONS,
+  API_BASE,
+  ROUTES,
+} from "../lib/upstream.mjs";
 import { createDemoRequest } from "../pages/runtime.mjs";
+import { createLiveRequest } from "../pages/live.mjs";
 
 const html = await readFile(
   new URL("../public/index.html", import.meta.url),
@@ -40,7 +46,10 @@ async function fixture(t, options = {}) {
   const virtualConsole = new VirtualConsole();
   virtualConsole.on("jsdomError", (error) => consoleErrors.push(error.message));
   const dom = new JSDOM(html, {
-    url: options.staticDemo ? "https://lproperty.github.io/Sesame/" : origin,
+    url:
+      options.staticDemo || options.browserLive
+        ? "https://lproperty.github.io/Sesame/"
+        : origin,
     runScripts: "outside-only",
     pretendToBeVisual: true,
     virtualConsole,
@@ -51,8 +60,8 @@ async function fixture(t, options = {}) {
   const networkAttempts = [];
   window.fetch = async (path, init = {}) => {
     networkAttempts.push(path);
-    if (options.staticDemo)
-      throw new Error("The public demo must not use the network.");
+    if (options.staticDemo || options.browserLive)
+      throw new Error("The hosted UI must use its dedicated browser adapter.");
     const target = new URL(path, origin);
     assert.equal(
       target.origin,
@@ -83,7 +92,41 @@ async function fixture(t, options = {}) {
     this.open = false;
     this.dispatchEvent(new window.Event("close"));
   };
-  if (options.staticDemo) window.sesameDemoRequest = createDemoRequest({ now });
+  if (options.staticDemo) window.sesameRequest = createDemoRequest({ now });
+  const estateRequests = [];
+  if (options.browserLive)
+    window.sesameRequest = createLiveRequest({
+      now,
+      readOnly: options.readOnly || false,
+      fetchImpl: async (url, init) => {
+        estateRequests.push({ url, init });
+        const operation = Object.keys(ROUTES).find(
+          (key) => API_BASE + ROUTES[key] === url,
+        );
+        assert.ok(operation, "Only the fixed estate routes are accepted.");
+        assert.equal(init.credentials, "omit");
+        assert.equal(init.mode, "cors");
+        assert.equal(init.cache, "no-store");
+        assert.equal(init.referrerPolicy, "no-referrer");
+        const headers = new Headers(init.headers);
+        try {
+          const result = await upstream(operation, JSON.parse(init.body), {
+            token: headers.get("token"),
+            unitId: headers.get("unitId"),
+            userType: headers.get("userType"),
+          });
+          return new Response(JSON.stringify({ code: 1200, data: result }));
+        } catch (error) {
+          return new Response(
+            JSON.stringify({
+              code: error.status === 401 ? 1401 : 1400,
+              message: error.message,
+            }),
+            { status: error.status || 500 },
+          );
+        }
+      },
+    });
   window.eval(source);
   const query = (selector) => window.document.querySelector(selector);
   const all = (selector) => [...window.document.querySelectorAll(selector)];
@@ -111,6 +154,10 @@ async function fixture(t, options = {}) {
   const change = (target) =>
     target.dispatchEvent(new window.Event("change", { bubbles: true }));
   const login = async () => {
+    if (options.browserLive) {
+      query("#username").value = "demo";
+      query("#password").value = "demo";
+    }
     submit(query("#login-form"));
     await until(() => all(".facility-card").length === 11, "facility list");
   };
@@ -147,6 +194,7 @@ async function fixture(t, options = {}) {
     calls,
     consoleErrors,
     networkAttempts,
+    estateRequests,
     writes: () => calls.filter((op) => WRITE_OPERATIONS.has(op)),
   };
 }
@@ -230,7 +278,7 @@ test("Pages UI has no credential form, keeps assets and sign-out under the repos
     "/Sesame/assets/estate.jpg",
   );
   await f.login();
-  assert.equal(f.window.sesameDemoRequest, undefined);
+  assert.equal(f.window.sesameRequest, undefined);
   assert.match(f.query(".mode-banner").textContent, /PUBLIC DEMO/);
   assert.equal(
     f.query('.mobile-nav [aria-current="page"]').textContent.trim(),
@@ -291,6 +339,50 @@ test("Pages booking flow creates only a simulated reservation and never displays
   );
   assert.deepEqual(f.networkAttempts, []);
   assert.deepEqual(f.calls, []);
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("live Pages UI signs in and completes the real booking flow against a mocked estate API", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  assert.equal(f.query("#username").value, "");
+  assert.equal(f.query("#password").value, "");
+  assert.match(
+    f.query(".login-footnote").textContent,
+    /directly to Intelliving over HTTPS/,
+  );
+  await f.login();
+  assert.equal(f.query(".mode-banner"), null);
+  assert.equal(f.window.sesameRequest, undefined);
+  assert.equal(
+    f.window.document.body.innerHTML.includes("local-demo-token"),
+    false,
+  );
+  await f.chooseSlot();
+  f.query('[data-action="preview"]').click();
+  await f.until(() => f.query("#confirm-booking"), "live review");
+  assert.equal(f.writes().length, 0);
+  assert.match(f.query("#confirm-booking").textContent, /Confirm booking/);
+  f.query("#confirm-booking").click();
+  f.query("#confirm-booking").click();
+  await f.until(() => f.query(".bank-details"), "live payment instructions");
+  assert.equal(f.writes().filter((op) => op === "insertBooking").length, 1);
+  assert.equal(f.writes().filter((op) => op === "createOrder").length, 1);
+  assert.equal(
+    f.query(".bank-grid img").getAttribute("src"),
+    "/Sesame/assets/bank-transfer.jpg",
+  );
+  f.query('[data-action="go-bookings"]').click();
+  await f.until(
+    () => f.all(".booking-row").length === 1,
+    "live pending booking",
+  );
+  f.query('.mobile-nav [data-action="logout"]').click();
+  await f.until(() => f.query("#login-form"), "live sign-out");
+  assert.equal(f.window.location.pathname, "/Sesame/");
+  assert.equal(f.window.document.cookie, "");
+  assert.equal(f.window.localStorage.length, 0);
+  assert.equal(f.window.sessionStorage.length, 0);
+  assert.deepEqual(f.networkAttempts, []);
   assert.deepEqual(f.consoleErrors, []);
 });
 

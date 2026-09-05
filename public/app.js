@@ -1,10 +1,16 @@
 const app = document.querySelector("#app");
 const modal = document.querySelector("#modal");
 const toastRoot = document.querySelector("#toasts");
-const demoRequest = globalThis.sesameDemoRequest;
-delete globalThis.sesameDemoRequest;
-const assetUrl = (path) =>
-  new URL(path.replace(/^\//, ""), new URL("./", location.href)).pathname;
+const pageRequest = globalThis.sesameRequest;
+delete globalThis.sesameRequest;
+const assetVersion = document.querySelector(
+  'meta[name="sesame-build"]',
+)?.content;
+const assetUrl = (path) => {
+  const url = new URL(path.replace(/^\//, ""), new URL("./", location.href));
+  if (assetVersion) url.searchParams.set("v", assetVersion);
+  return url.pathname + url.search;
+};
 const state = {
   config: {},
   session: null,
@@ -173,7 +179,7 @@ async function api(path, data) {
   }
   let response;
   try {
-    response = await (demoRequest || fetch)(path, {
+    response = await (pageRequest || fetch)(path, {
       method: data === undefined ? "GET" : "POST",
       headers,
       credentials: "same-origin",
@@ -181,7 +187,9 @@ async function api(path, data) {
     });
   } catch {
     const error = new Error(
-      "Unable to reach the local app. Check that the server is running.",
+      state.config.browserClient
+        ? "Unable to reach the estate service. Check your internet connection."
+        : "Unable to reach the local app. Check that the server is running.",
     );
     error.code = "CONNECTION_INTERRUPTED";
     throw error;
@@ -202,6 +210,11 @@ async function api(path, data) {
     error.details = value.error?.details;
     if (response.status === 401 && path !== "/api/login" && state.session) {
       state.session = null;
+      state.bookings = [];
+      state.facilities = [];
+      state.detail = null;
+      state.slots = [];
+      resetSelection();
       state.routeGeneration++;
       state.committing = false;
       closeModal();
@@ -251,7 +264,8 @@ function renderLogin(message = "") {
           <button class="button full" type="submit" id="login-submit">${state.config.demo ? "Explore the demo" : "Sign in"} ${icon("arrow")}</button>
         </form>
         ${state.config.staticDemo ? "" : '<div class="login-help"><span class="muted field-note">Signing in as a unit owner</span><button class="text-button" data-action="login-help">Need help signing in?</button></div>'}
-        <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : "A private connection to your estate account."}</p>
+        <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : state.config.browserClient ? "Sign-in goes directly to Intelliving over HTTPS." : "A private connection to your estate account."}</p>
+        ${state.config.browserClient ? '<p class="field-note">Your session lasts in this tab only. Refreshing requires a new sign-in. Sesame is an independent resident portal.</p>' : ""}
       </div>
       <div class="login-bottom">Grand Dunman &nbsp; · &nbsp; Spaces for the way you live</div>
     </main>
@@ -1123,7 +1137,7 @@ document.addEventListener(
   (event) => {
     if (
       event.target instanceof HTMLImageElement &&
-      !event.target.src.endsWith("/assets/estate.jpg")
+      !event.target.src.split("?")[0].endsWith("/assets/estate.jpg")
     )
       event.target.src = assetUrl("/assets/estate.jpg");
   },
@@ -1145,6 +1159,17 @@ window.addEventListener("beforeunload", (event) => {
     event.returnValue = "";
   }
 });
+
+if (pageRequest)
+  window.addEventListener("pagehide", () => {
+    state.session = null;
+    state.bookings = [];
+    state.facilities = [];
+    state.detail = null;
+    state.slots = [];
+    resetSelection();
+    state.routeGeneration++;
+  });
 
 async function start() {
   try {
