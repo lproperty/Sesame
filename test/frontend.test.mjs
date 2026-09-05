@@ -210,12 +210,6 @@ async function fixture(t, options = {}) {
       "tomorrow availability",
     );
     query(".slot:not(:disabled)").click();
-    query('[data-action="rules"]').click();
-    await until(
-      () => query("#accept-rules") && !query("#accept-rules").disabled,
-      "read rules",
-    );
-    query("#accept-rules").click();
   };
   return {
     window,
@@ -267,16 +261,11 @@ test("frontend signs in, filters, previews, submits once to the simulator, and s
   await f.chooseSlot();
   assert.equal(f.writes().length, 0);
   assert.match(f.query("#booking-summary").textContent, /S\$116.35/);
-  f.query('[data-action="preview"]').click();
-  await f.until(() => f.query("#confirm-booking"), "final review");
-  assert.equal(
-    f.writes().length,
-    0,
-    "Opening review must not reserve anything.",
-  );
-  assert.match(f.query("#modal").textContent, /demonstration booking only/);
-  f.query("#confirm-booking").click();
-  f.query("#confirm-booking").click();
+  assert.equal(f.query("#modal").open, false);
+  assert.equal(f.query("#book-submit").disabled, false);
+  assert.equal(f.query('input[type="checkbox"]'), null);
+  f.query("#book-submit").click();
+  f.query("#book-submit").click();
   await f.until(
     () => f.query('[data-action="go-bookings"]'),
     "submission result",
@@ -350,14 +339,11 @@ test("Pages booking flow creates only a simulated reservation and never displays
   const f = await fixture(t, { staticDemo: true });
   await f.login();
   await f.chooseSlot();
-  f.query('[data-action="preview"]').click();
-  await f.until(() => f.query("#confirm-booking"), "public demo review");
-  assert.equal(
-    f.window.document.documentElement.classList.contains("modal-open"),
-    true,
-  );
-  f.query("#confirm-booking").click();
-  f.query("#confirm-booking").click();
+  assert.equal(f.query("#modal").open, false);
+  assert.equal(f.query("#book-submit").disabled, false);
+  assert.equal(f.query('input[type="checkbox"]'), null);
+  f.query("#book-submit").click();
+  f.query("#book-submit").click();
   await f.until(
     () => f.query('[data-action="go-bookings"]'),
     "simulated result",
@@ -401,12 +387,11 @@ test("live Pages UI signs in and completes the real booking flow against a mocke
     false,
   );
   await f.chooseSlot();
-  f.query('[data-action="preview"]').click();
-  await f.until(() => f.query("#confirm-booking"), "live review");
-  assert.equal(f.writes().length, 0);
-  assert.match(f.query("#confirm-booking").textContent, /Confirm booking/);
-  f.query("#confirm-booking").click();
-  f.query("#confirm-booking").click();
+  assert.equal(f.query("#modal").open, false);
+  assert.equal(f.query("#book-submit").disabled, false);
+  assert.equal(f.query('input[type="checkbox"]'), null);
+  f.query("#book-submit").click();
+  f.query("#book-submit").click();
   await f.until(() => f.query(".bank-details"), "live payment instructions");
   assert.equal(f.writes().filter((op) => op === "insertBooking").length, 1);
   assert.equal(f.writes().filter((op) => op === "createOrder").length, 1);
@@ -554,16 +539,14 @@ test("sign-out clears a saved entry pass as well as the live session", async (t)
   assert.equal(f.query("#entry-qr svg"), null);
 });
 
-test("read-only frontend exposes a review but disables final confirmation", async (t) => {
+test("read-only frontend shows the booking summary with submission disabled", async (t) => {
   const f = await fixture(t, { readOnly: true });
   await f.login();
   await f.chooseSlot();
-  f.query('[data-action="preview"]').click();
-  await f.until(() => f.query("#confirm-booking"), "read-only review");
-  assert.equal(f.query("#confirm-booking").disabled, true);
-  f.query("#confirm-booking").click();
+  assert.equal(f.query("#book-submit").disabled, true);
+  f.query("#book-submit").click();
   assert.equal(f.writes().length, 0);
-  assert.deepEqual(f.consoleErrors, []);
+  assert.equal(f.query("#modal").open, false);
 });
 
 test("disabled estate slots cannot be selected and rules are sanitized before display", async (t) => {
@@ -597,118 +580,36 @@ test("disabled estate slots cannot be selected and rules are sanitized before di
   assert.equal(f.writes().length, 0);
 });
 
-test("an occupied slot can be inspected without selecting it or exposing another resident", async (testContext) => {
-  const fixtureData = await fixture(testContext, {
-    override: async (operation, body, context, demo) => {
-      if (operation === "availability")
-        return (await demo(operation, body, context)).map((slot) => ({
-          ...slot,
-          status: 1,
-          ordered: 1,
-          remainingNum: 0,
-          gmtCreate: "2026-08-28 13:07:34",
-          ownerName: "Private Resident",
-          unitName: "#99-99",
-        }));
-    },
-  });
-  await fixtureData.login();
-  fixtureData.all(".facility-card")[0].click();
-  await fixtureData.until(
-    () => fixtureData.all(".slot-details-button").length === 2,
-    "slot inspection buttons",
-  );
-  assert.equal(fixtureData.all(".slot:not(:disabled)").length, 0);
-  fixtureData.query(".slot-details-button").click();
-  await fixtureData.until(
-    () =>
-      /No booking for your unit/.test(
-        fixtureData.query("#slot-own-bookings")?.textContent,
-      ),
-    "own booking lookup",
-  );
-  const detailsText = fixtureData.query("#modal").textContent;
-  assert.match(detailsText, /Booking capacity/);
-  assert.match(detailsText, /Capacity unavailable/);
-  assert.match(detailsText, /2026-08-28 13:07:34/);
-  assert.equal(detailsText.includes("Private Resident"), false);
-  assert.equal(detailsText.includes("#99-99"), false);
-  assert.equal(fixtureData.query(".slot.selected"), null);
-  assert.equal(fixtureData.query("#confirm-booking"), null);
-  assert.equal(fixtureData.writes().length, 0);
-  assert.deepEqual(fixtureData.consoleErrors, []);
-});
-
-test("slot inspection links an existing booking only to the account’s own selected unit", async (testContext) => {
-  const fixtureData = await fixture(testContext);
-  fixtureData.demo.bookings.push({
-    id: "existing-own-booking",
-    unitId: "demo-unit-1",
-    facilityId: "demo-facility-1",
-    facilityDetailId: "demo-facility-1-2026-09-06-0",
-    facilityName: "Jewel Function Room 1",
-    startTime: "2026-09-06 09:00:00",
-    endTime: "2026-09-06 15:00:00",
-    bookingNum: 1,
-    pricing: 116.35,
-    paidTotal: 116.35,
-    status: 0,
-    orderNo: "EXISTING-ORDER",
-    gmtCreate: "2026-09-01 12:00:00",
-  });
-  await fixtureData.login();
-  fixtureData.all(".facility-card")[0].click();
-  await fixtureData.until(
-    () => fixtureData.query("#booking-date") && fixtureData.all(".slot").length,
-    "facility slots",
-  );
-  fixtureData.query("#booking-date").value = "2026-09-06";
-  fixtureData.change(fixtureData.query("#booking-date"));
-  await fixtureData.until(
-    () =>
-      fixtureData.all(".slot-details-button").length === 2 &&
-      fixtureData.query(".slot:disabled"),
-    "occupied session",
-  );
-  fixtureData.query(".slot-details-button").click();
-  await fixtureData.until(
-    () => fixtureData.query(".own-slot-booking"),
-    "own booking association",
-  );
-  assert.match(fixtureData.query(".own-slot-booking").textContent, /#08-01/);
-  assert.match(
-    fixtureData.query(".own-slot-booking").textContent,
-    /existing-own-booking/,
-  );
-  assert.match(
-    fixtureData.query(".own-slot-booking").textContent,
-    /EXISTING-ORDER/,
-  );
-  assert.match(
-    fixtureData.query(".own-slot-booking").textContent,
-    /2026-09-01 12:00:00/,
-  );
-  assert.equal(fixtureData.writes().length, 0);
-});
-
-test("an incomplete owner profile is explained and its mutations are disabled during read-only testing", async (t) => {
+test("missing email and temporary-password flags do not add a local booking gate", async (t) => {
   const f = await fixture(t, {
-    readOnly: true,
-    override: async (op, body, context, demo) => {
-      if (op === "login") {
-        const value = await demo(op, body, context);
-        value.ownerLoginOutDTO.email = "";
-        return value;
+    browserLive: true,
+    override: async (operation, body, context, demo) => {
+      if (operation === "login") {
+        const result = await demo(operation, body, context);
+        result.ownerLoginOutDTO.email = "";
+        result.ownerLoginOutDTO.isTmp = 1;
+        return result;
       }
     },
   });
   await f.login();
-  assert.match(f.query(".profile-banner").textContent, /verified email/);
-  f.query('[data-action="profile"]').click();
-  assert.ok(f.query("#profile-form"));
-  assert.equal(f.query('[data-action="send-code"]').disabled, true);
-  assert.equal(f.query('#profile-form button[type="submit"]').disabled, true);
-  assert.equal(f.writes().length, 0);
+  await f.chooseSlot();
+  assert.equal(f.query(".profile-banner"), null);
+  assert.equal(f.query("#profile-form"), null);
+  assert.equal(f.query("#book-submit").disabled, false);
+  f.query("#book-submit").click();
+  await f.until(
+    () => f.query(".bank-details"),
+    "booking without app-only profile gate",
+  );
+  assert.equal(
+    f.writes().filter((operation) => operation === "insertBooking").length,
+    1,
+  );
+  assert.equal(
+    f.calls.some((operation) => /profile|passwordCode/.test(operation)),
+    false,
+  );
 });
 
 test("an expired estate token returns the frontend to sign-in and removes the protected view", async (t) => {
@@ -728,4 +629,42 @@ test("an expired estate token returns the frontend to sign-in and removes the pr
   assert.equal(f.query(".facility-card"), null);
   assert.equal(f.writes().length, 0);
   assert.deepEqual(f.consoleErrors, []);
+});
+
+test("a changed price is shown inline without booking at an unapproved amount", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  await f.login();
+  await f.chooseSlot();
+  f.demo.facilities[0].pricing = 150;
+  f.query("#book-submit").click();
+  await f.until(
+    () => /price.*changed/.test(f.query("#booking-summary")?.textContent),
+    "changed price message",
+  );
+  assert.equal(f.writes().length, 0);
+  assert.equal(f.query("#modal").open, false);
+});
+
+test("an estate rejection is shown without launching profile verification", async (t) => {
+  const f = await fixture(t, {
+    browserLive: true,
+    override: async (operation) => {
+      if (operation === "insertBooking")
+        throw new AppError(
+          "The estate requires an email address.",
+          422,
+          "ESTATE_REJECTED",
+        );
+    },
+  });
+  await f.login();
+  await f.chooseSlot();
+  f.query("#book-submit").click();
+  await f.until(
+    () =>
+      /estate requires an email/.test(f.query("#booking-summary")?.textContent),
+    "estate message",
+  );
+  assert.equal(f.query("#profile-form"), null);
+  assert.equal(f.calls.includes("createOrder"), false);
 });

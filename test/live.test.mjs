@@ -173,11 +173,7 @@ test("browser booking requires an explicit reviewed confirmation, and repeated c
 test("read-only verification of the live browser client cannot send estate mutations", async () => {
   const f = fixture({ readOnly: true });
   await f.login();
-  for (const path of [
-    "/api/profile/code",
-    "/api/profile/complete",
-    "/api/bookings/commit",
-  ])
+  for (const path of ["/api/bookings", "/api/bookings/commit"])
     assert.equal((await f.request(path, { confirm: true })).status, 403);
   assert.equal(
     f.requests.some((r) => WRITE_OPERATIONS.has(r.operation)),

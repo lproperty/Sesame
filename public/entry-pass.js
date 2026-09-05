@@ -1,7 +1,6 @@
 import qrcode from "./vendor/qrcode.mjs";
 
 export const ENTRY_REFRESH_MS = 10_000;
-export const ENTRY_PASS_TTL_MS = 7 * 24 * 60 * 60_000;
 
 const id = (value) => {
   if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(value))

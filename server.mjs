@@ -254,6 +254,8 @@ export function createApplication({
           );
         if (req.method === "POST" && url.pathname === "/api/bookings/preview")
           return json(res, 200, await portal.preview(session, body));
+        if (req.method === "POST" && url.pathname === "/api/bookings")
+          return json(res, 200, await portal.book(session, body));
         if (req.method === "POST" && url.pathname === "/api/bookings/commit")
           return json(res, 200, await portal.commit(session, body));
         const paymentMatch = /^\/api\/payments\/([a-zA-Z0-9_-]+)$/.exec(
@@ -265,13 +267,6 @@ export function createApplication({
             200,
             await portal.paymentStatus(session, paymentMatch[1]),
           );
-        if (req.method === "POST" && url.pathname === "/api/profile/code")
-          return json(res, 200, await portal.sendCode(session, body));
-        if (req.method === "POST" && url.pathname === "/api/profile/complete") {
-          const result = await portal.completeProfile(session, body);
-          sessions.delete(getSessionId(req));
-          return json(res, 200, result, { "set-cookie": cookie("", true) });
-        }
         throw new AppError(
           "That page or action was not found.",
           404,

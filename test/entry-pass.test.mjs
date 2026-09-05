@@ -6,7 +6,6 @@ import {
   createEntryQr,
   entryPayload,
   entryPassFromSession,
-  ENTRY_PASS_TTL_MS,
 } from "../public/entry-pass.js";
 import { createPassStore, PASS_DATABASE } from "../public/pass-store.js";
 
@@ -121,28 +120,21 @@ test("saved pass is encrypted with a non-extractable key, restores after reopeni
     now: () => now,
   }).load();
   assert.deepEqual(reopened.pass, pass);
-  assert.equal(reopened.expiresAt, now + ENTRY_PASS_TTL_MS);
+  assert.equal(reopened.expiresAt, undefined);
   assert.equal(JSON.stringify(reopened).includes("private"), false);
   await store.clear();
   assert.equal(await store.load(), null);
 });
 
-test("tampered and expired saved passes are rejected and removed", async () => {
+test("tampered saved passes are rejected and removed", async () => {
   const database = new IDBFactory();
-  const store = createPassStore({ indexedDB: database, now: () => now });
+  const store = createPassStore({ indexedDB: database });
   await store.save(pass);
   const record = await raw(database);
   const bytes = new Uint8Array(record.ciphertext.slice(0));
   bytes[0] ^= 1;
   await raw(database, { ...record, ciphertext: bytes.buffer });
   assert.equal(await store.load(), null);
-  assert.equal(await raw(database), undefined);
-  await store.save(pass);
-  const expired = createPassStore({
-    indexedDB: database,
-    now: () => now + ENTRY_PASS_TTL_MS + 1,
-  });
-  assert.equal(await expired.load(), null);
   assert.equal(await raw(database), undefined);
 });
 
@@ -155,4 +147,29 @@ test("forget queued during encryption removes the completed save instead of allo
   const forget = store.clear();
   await Promise.all([save, forget]);
   assert.equal(await store.load(), null);
+});
+
+test("existing seven-day passes remain usable without renewal", async () => {
+  const database = new IDBFactory();
+  const store = createPassStore({ indexedDB: database });
+  await store.save(pass);
+  const record = await raw(database);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const bytes = new TextEncoder().encode(
+    JSON.stringify({ version: 1, pass, createdAt: 1, expiresAt: 604800001 }),
+  );
+  const ciphertext = await crypto.subtle.encrypt(
+    {
+      name: "AES-GCM",
+      iv,
+      additionalData: new TextEncoder().encode(
+        "Sesame resident entry pass, version 1",
+      ),
+    },
+    record.key,
+    bytes,
+  );
+  await raw(database, { ...record, iv, ciphertext });
+  assert.deepEqual((await store.load()).pass, pass);
+  assert.equal((await store.load()).expiresAt, undefined);
 });

@@ -143,11 +143,11 @@ test("read-only HTTP session can browse and preview but every write is refused",
   assert.equal(
     (await f.request("/api/profile/code", { email: "example@example.com" }))
       .status,
-    403,
+    404,
   );
   assert.equal(
     (await f.request("/api/profile/complete", { confirm: true })).status,
-    403,
+    404,
   );
   assert.equal(f.upstream.calls.length, before);
   assert.equal(

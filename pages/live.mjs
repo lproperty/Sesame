@@ -179,6 +179,8 @@ export function createLiveRequest({
       return portal.facility(active, facility[1]);
     if (action === "GET /api/bookings")
       return portal.bookings(active, url.searchParams.get("tab") || "current");
+    if (action === "POST /api/bookings")
+      return mutation(() => portal.book(active, body));
     if (action === "POST /api/bookings/preview")
       return portal.preview(active, body);
     if (action === "POST /api/bookings/commit")
@@ -186,13 +188,6 @@ export function createLiveRequest({
     const payment = /^\/api\/payments\/([a-zA-Z0-9_-]+)$/.exec(url.pathname);
     if (method === "GET" && payment)
       return portal.paymentStatus(active, payment[1]);
-    if (action === "POST /api/profile/code")
-      return mutation(() => portal.sendCode(active, body));
-    if (action === "POST /api/profile/complete") {
-      const result = await mutation(() => portal.completeProfile(active, body));
-      forget();
-      return result;
-    }
     throw new AppError("That page or action was not found.", 404, "NOT_FOUND");
   };
   const request = async (path, init = {}) => {
@@ -209,7 +204,7 @@ export function createLiveRequest({
       const value = await route(path, init);
       if (
         requestEpoch !== epoch &&
-        !["/api/login", "/api/logout", "/api/profile/complete"].includes(path)
+        !["/api/login", "/api/logout"].includes(path)
       )
         throw new AppError(
           "Your session changed. Try the current view again.",
@@ -221,7 +216,7 @@ export function createLiveRequest({
       if (
         requestEpoch !== epoch &&
         session &&
-        !["/api/login", "/api/logout", "/api/profile/complete"].includes(path)
+        !["/api/login", "/api/logout"].includes(path)
       )
         return json(
           {

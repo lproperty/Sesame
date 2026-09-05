@@ -40,7 +40,6 @@ async function setup(options = {}) {
     slotId: `demo-facility-1-${DAY}-0`,
     date: DAY,
     quantity: 1,
-    rulesAccepted: true,
   };
   return {
     portal,
@@ -288,14 +287,12 @@ test("foreign unit and facility selections never reach booking insertion", async
   assert.equal(f.writes().length, 0);
 });
 
-test("preview performs only reads, requires rules, and derives price and unit from the session", async () => {
+test("booking preparation ignores acceptance flags and derives price and unit from the session", async () => {
   const f = await setup();
-  await assert.rejects(
-    f.portal.preview(f.session, { ...f.previewBody, rulesAccepted: false }),
-    matches("RULES_REQUIRED"),
-  );
   const quote = await f.portal.preview(f.session, {
     ...f.previewBody,
+    rulesAccepted: false,
+    noticeAccepted: false,
     unitId: "foreign",
     projectId: "foreign",
     userType: 9,
@@ -303,33 +300,23 @@ test("preview performs only reads, requires rules, and derives price and unit fr
     amount: 1,
   });
   assert.equal(quote.unit.unitId, "demo-unit-1");
-  assert.equal(quote.unitPrice, 11635);
   assert.equal(quote.amount, 11635);
   assert.equal(f.writes().length, 0);
+  assert.equal(
+    f.calls.some((call) => call.op === "notice"),
+    false,
+  );
 });
 
-test("quantity limits and a server notice must be acknowledged", async () => {
+test("booking quantity cannot exceed the available session limit", async () => {
   const f = await setup();
   await assert.rejects(
     f.portal.preview(f.session, { ...f.previewBody, quantity: 2 }),
     matches("QUANTITY_UNAVAILABLE"),
   );
-  const withNotice = await setup({
-    override: async (op) =>
-      op === "notice"
-        ? { show: true, notice: "Monthly facility rules apply." }
-        : undefined,
-  });
-  await assert.rejects(withNotice.preview(), matches("NOTICE_REQUIRED"));
-  const quote = await withNotice.portal.preview(withNotice.session, {
-    ...withNotice.previewBody,
-    noticeAccepted: true,
-  });
-  assert.ok(quote.previewId);
-  assert.equal(withNotice.writes().length, 0);
 });
 
-test("read-only mode rejects reservation, profile and email mutations before any upstream call", async () => {
+test("read-only mode rejects reservations before any upstream call", async () => {
   const f = await setup({ readOnly: true });
   const quote = await f.preview();
   const before = f.calls.length;
@@ -338,17 +325,13 @@ test("read-only mode rejects reservation, profile and email mutations before any
     matches("READ_ONLY"),
   );
   await assert.rejects(
-    f.portal.sendCode(f.session, { email: "fake@example.com" }),
-    matches("READ_ONLY"),
-  );
-  await assert.rejects(
-    f.portal.completeProfile(f.session, { confirm: true }),
+    f.portal.book(f.session, { confirm: true }),
     matches("READ_ONLY"),
   );
   assert.equal(f.calls.length, before);
 });
 
-test("profile completion and explicit final confirmation are required for a live-mode write", async () => {
+test("booking requires explicit submission but not app-imposed profile completion", async () => {
   const f = await setup();
   const quote = await f.preview();
   await assert.rejects(
@@ -356,11 +339,11 @@ test("profile completion and explicit final confirmation are required for a live
     matches("CONFIRMATION_REQUIRED"),
   );
   f.session.user.needsEmail = true;
-  await assert.rejects(
-    f.portal.commit(f.session, { previewId: quote.previewId, confirm: true }),
-    matches("PROFILE_INCOMPLETE"),
-  );
-  assert.equal(f.writes().length, 0);
+  const result = await f.portal.commit(f.session, {
+    previewId: quote.previewId,
+    confirm: true,
+  });
+  assert.equal(result.status, "payment_pending");
 });
 
 test("successful checkout sends the recovered insertion/order payloads once, using integer cents", async () => {
@@ -471,18 +454,27 @@ test("the final availability check prevents a stale slot from being booked", asy
   assert.equal(f.writes().length, 0);
 });
 
-test("a changed price or changed rules requires a new review and makes no reservation", async () => {
-  for (const field of ["pricing", "regulations"]) {
-    const f = await setup();
-    const quote = await f.preview();
-    f.demo.facilities[0][field] =
-      field === "pricing" ? 150 : "<p>New facility rules.</p>";
-    await assert.rejects(
-      f.portal.commit(f.session, { previewId: quote.previewId, confirm: true }),
-      matches("PREVIEW_CHANGED"),
-    );
-    assert.equal(f.writes().length, 0);
-  }
+test("a changed price prevents a booking but changed rules do not add a gate", async () => {
+  const f = await setup();
+  const quote = await f.preview();
+  f.demo.facilities[0].pricing = 150;
+  await assert.rejects(
+    f.portal.commit(f.session, { previewId: quote.previewId, confirm: true }),
+    matches("PREVIEW_CHANGED"),
+  );
+  assert.equal(f.writes().length, 0);
+  const g = await setup();
+  const other = await g.preview();
+  g.demo.facilities[0].regulations = "Changed rules";
+  assert.equal(
+    (
+      await g.portal.commit(g.session, {
+        previewId: other.previewId,
+        confirm: true,
+      })
+    ).status,
+    "payment_pending",
+  );
 });
 
 test("a changed start time with the same slot ID still requires a new review", async () => {
@@ -607,42 +599,6 @@ test("an unreadable reservation ID is treated as uncertain without another inser
   assert.equal(f.writes().length, 1);
 });
 
-test("profile completion sends the APK fields only after confirmation, and verification emails have a cooldown", async () => {
-  const f = await setup({
-    override: async (op) =>
-      ["profileCode", "completeProfile"].includes(op) ? {} : undefined,
-  });
-  f.session.user.needsEmail = true;
-  const fields = {
-    email: "resident@example.com",
-    username: "Resident",
-    phone: "",
-    cipher: "new-test-password",
-    confirmPassword: "new-test-password",
-    verification: "123456",
-  };
-  await assert.rejects(f.portal.completeProfile(f.session, fields));
-  assert.equal(f.writes().length, 0);
-  await f.portal.sendCode(f.session, { email: fields.email });
-  await assert.rejects(
-    f.portal.sendCode(f.session, { email: fields.email }),
-    matches("CODE_COOLDOWN"),
-  );
-  assert.equal(
-    (await f.portal.completeProfile(f.session, { ...fields, confirm: true }))
-      .signInAgain,
-    true,
-  );
-  const payload = f.writes().find((c) => c.op === "completeProfile").body;
-  assert.deepEqual(payload, {
-    email: fields.email,
-    username: fields.username,
-    phone: "",
-    cipher: fields.cipher,
-    verification: fields.verification,
-  });
-});
-
 test("upstream client uses APK headers and refuses every mutation in read-only mode", async () => {
   const sent = [];
   const api = createUpstream({
@@ -684,4 +640,41 @@ test("upstream application errors and invalid JSON are not mistaken for success"
     fetchImpl: async () => new Response("<html>Temporary error</html>"),
   });
   await assert.rejects(api("facilities"), matches("UPSTREAM_RESPONSE"));
+});
+
+test("one Book action checks availability once and repeated requests do not insert again", async () => {
+  const f = await setup();
+  const quoted = await f.preview();
+  const body = {
+    ...f.previewBody,
+    confirm: true,
+    expectedAmount: quoted.amount,
+    expectedUnitId: quoted.unit.unitId,
+    expectedStartTime: quoted.startTime,
+    expectedEndTime: quoted.endTime,
+  };
+  const before = f.calls.length;
+  const first = await f.portal.book(f.session, body);
+  const second = await f.portal.book(f.session, body);
+  assert.equal(second.bookingId, first.bookingId);
+  assert.equal(
+    f.calls.slice(before).filter((call) => call.op === "availability").length,
+    1,
+  );
+  assert.equal(
+    f.writes().filter((call) => call.op === "insertBooking").length,
+    1,
+  );
+  assert.equal(
+    f.writes().filter((call) => call.op === "createOrder").length,
+    1,
+  );
+  assert.equal(
+    f
+      .writes()
+      .some(
+        (call) => "rulesAccepted" in call.body || "noticeAccepted" in call.body,
+      ),
+    false,
+  );
 });

@@ -76,12 +76,6 @@ export function createDemoRequest({ now = Date.now } = {}) {
     };
   };
   const reviewBooking = (body) => {
-    if (body.rulesAccepted !== true)
-      throw new AppError(
-        "Read and accept the demonstration rules first.",
-        400,
-        "RULES_REQUIRED",
-      );
     const selected = facility(body.facilityId);
     const slot = availability(selected.id, body.date).slots.find(
       (s) => s.id === body.slotId,
@@ -236,6 +230,30 @@ export function createDemoRequest({ now = Date.now } = {}) {
       return facilityMatch[2]
         ? availability(facilityMatch[1], url.searchParams.get("date"))
         : facility(facilityMatch[1]);
+    if (route === "POST /api/bookings") {
+      if (body.confirm !== true)
+        throw new AppError("Use the Book button to submit a reservation.");
+      const previous = [...reviews.values()].find(
+        (review) =>
+          review.result &&
+          review.preview.unit.unitId === unit.unitId &&
+          review.slotId === body.slotId,
+      );
+      if (previous) return previous.result;
+      const checked = reviewBooking(body);
+      if (
+        checked.amount !== body.expectedAmount ||
+        checked.unit.unitId !== body.expectedUnitId ||
+        checked.startTime !== body.expectedStartTime ||
+        checked.endTime !== body.expectedEndTime
+      )
+        throw new AppError(
+          "The price, time or selected unit changed. Select a time again.",
+          409,
+          "BOOKING_CHANGED",
+        );
+      return commitBooking({ previewId: checked.previewId, confirm: true });
+    }
     if (route === "POST /api/bookings/preview") return reviewBooking(body);
     if (route === "POST /api/bookings/commit") return commitBooking(body);
     if (route === "GET /api/bookings") {

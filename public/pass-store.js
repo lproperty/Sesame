@@ -1,4 +1,4 @@
-import { normalizeEntryPass, ENTRY_PASS_TTL_MS } from "./entry-pass.js";
+import { normalizeEntryPass } from "./entry-pass.js";
 
 export const PASS_DATABASE = "sesame-entry-pass-v1";
 const STORE = "entry";
@@ -13,7 +13,6 @@ const binding = new TextEncoder().encode(
 export function createPassStore({
   indexedDB = globalThis.indexedDB,
   crypto = globalThis.crypto,
-  now = Date.now,
 } = {}) {
   let pending = Promise.resolve();
   const available = Boolean(indexedDB && crypto?.subtle);
@@ -64,8 +63,6 @@ export function createPassStore({
     save: (input) =>
       serial(async () => {
         const pass = normalizeEntryPass(input);
-        const createdAt = now();
-        const expiresAt = createdAt + ENTRY_PASS_TTL_MS;
         const key = await crypto.subtle.generateKey(
           { name: "AES-GCM", length: 256 },
           false,
@@ -73,7 +70,7 @@ export function createPassStore({
         );
         const iv = crypto.getRandomValues(new Uint8Array(12));
         const bytes = new TextEncoder().encode(
-          JSON.stringify({ version: 1, pass, createdAt, expiresAt }),
+          JSON.stringify({ version: 1, pass }),
         );
         const ciphertext = await crypto.subtle.encrypt(
           { name: "AES-GCM", iv, additionalData: binding },
@@ -83,7 +80,7 @@ export function createPassStore({
         await transact("readwrite", (store) =>
           store.put({ version: 1, key, iv, ciphertext }, RECORD),
         );
-        return { pass, expiresAt };
+        return { pass };
       }),
     load: () =>
       serial(async () => {
@@ -106,18 +103,9 @@ export function createPassStore({
             record.ciphertext,
           );
           const value = JSON.parse(new TextDecoder().decode(bytes));
-          if (
-            value.version !== 1 ||
-            !Number.isSafeInteger(value.createdAt) ||
-            value.createdAt > now() + 60_000 ||
-            value.expiresAt !== value.createdAt + ENTRY_PASS_TTL_MS ||
-            value.expiresAt <= now()
-          )
-            throw new Error("Saved pass expired.");
-          return {
-            pass: normalizeEntryPass(value.pass),
-            expiresAt: value.expiresAt,
-          };
+          if (value.version !== 1) throw new Error("Invalid saved pass.");
+          // Existing saved passes also remain usable after their former expiry.
+          return { pass: normalizeEntryPass(value.pass) };
         } catch {
           await remove();
           return null;

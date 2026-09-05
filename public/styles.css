@@ -1526,6 +1526,12 @@ input[type="checkbox"] {
   top: 20px;
   padding: 23px 21px;
 }
+.facility-information {
+  grid-column: 1 / -1;
+}
+.summary-panel > #book-submit {
+  margin-top: 14px;
+}
 .summary-panel h2 {
   font-family: var(--serif);
   font-size: 23px;

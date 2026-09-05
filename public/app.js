@@ -30,17 +30,14 @@ const state = {
   slots: [],
   selectedSlot: null,
   quantity: 1,
-  rulesAccepted: false,
-  noticeAccepted: false,
+  bookingError: "",
   availabilityError: "",
   availabilityCheckedAt: "",
   inspectionGeneration: 0,
   slotsLoading: false,
   routeGeneration: 0,
   availabilityGeneration: 0,
-  previewLoading: false,
   committing: false,
-  preview: null,
   modalType: "",
   bookings: [],
   tab: "current",
@@ -50,8 +47,7 @@ const state = {
 const passStore = createPassStore();
 const entryRoute = () =>
   ["", "qr"].includes(location.hash.replace(/^#\/?/, "").split("/")[0]);
-const savedPassReady = () =>
-  state.savedPass && state.savedPass.expiresAt > Date.now();
+const savedPassReady = () => Boolean(state.savedPass);
 const savedPassMatches = (session) =>
   state.savedPass?.pass.ownerId === session?.user.id &&
   session.units.some(
@@ -79,8 +75,6 @@ const unitLabel = (unit) =>
   unit
     ? [unit.buildingName, unit.unitName].filter(Boolean).join(" · ")
     : "No active unit";
-const profileIncomplete = () =>
-  state.session?.user.needsEmail || state.session?.user.needsPasswordChange;
 const updateConfig = (session) => {
   for (const key of ["today", "lastDate", "timeZone", "demo", "readOnly"])
     state.config[key] = session[key];
@@ -297,11 +291,6 @@ function renderLogin(message = "") {
   </div>`;
 }
 
-function profileBanner() {
-  if (!profileIncomplete()) return "";
-  return `<div class="profile-banner"><div><strong>Finish setting up your owner account</strong><p>${state.session.user.needsEmail ? "Add a verified email before you make your first booking." : "Set a new password before you make your first booking."}</p></div><button class="text-button" data-action="profile">Complete profile ${icon("arrow")}</button></div>`;
-}
-
 function renderShell(content, section = "Facilities", cachedPass = null) {
   const identity =
     state.session ||
@@ -328,13 +317,12 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       <a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
       <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a></nav>
       <div class="sidebar-spacer"></div>
-      <div class="sidebar-tip">${icon("leaf")}<strong>Make yourself at home.</strong><p>Plan ahead for the moments that matter. Explore your estate’s shared spaces.</p></div>
       <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">${authenticated ? "Unit owner" : "Saved on this device"}</p></div><button class="icon-button" data-action="${authenticated ? "logout" : "forget-entry"}" title="${authenticated ? "Sign out" : "Forget saved pass"}" aria-label="${authenticated ? "Sign out" : "Forget saved pass"}">${icon("logout")}</button></div>
     </aside>
     <div class="workspace"><header class="topbar"><div class="topbar-crumb"><span>Resident services</span><span class="crumb-divider">/</span><span class="current">${esc(section)}</span></div>
       <div class="topbar-actions"><span class="property-tag">Grand Dunman, Singapore</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
       ${state.config.staticDemo ? '<div class="mode-banner"><strong>PUBLIC DEMO</strong><span>Sample data only. No real bookings or payments.</span></div>' : state.config.demo ? '<div class="mode-banner"><strong>DEMO</strong> An offline preview. All bookings here are simulated.</div>' : state.config.readOnly ? '<div class="mode-banner readonly">Read-only mode · Explore facilities and availability. Submissions are disabled.</div>' : ""}
-      <main class="page${active === "qr" ? " entry-page" : ""}" id="main-content" tabindex="-1">${active === "qr" ? "" : profileBanner()}${content}
+      <main class="page${active === "qr" ? " entry-page" : ""}" id="main-content" tabindex="-1">${content}
         <footer class="page-footer"><span>GRAND DUNMAN &nbsp; / &nbsp; RESIDENT PORTAL</span><span>${icon("clock")} All facility times are in Singapore time (SGT).</span></footer>
       </main>
     </div>
@@ -403,7 +391,7 @@ function renderEntry() {
       <p class="entry-unit">${esc(unitLabel(pass.unit))}</p><p id="entry-status" class="entry-status" role="status">Preparing a fresh code…</p>
     </div>
     <div class="entry-tools"><span id="entry-countdown" class="muted"></span><button class="text-button" data-action="refresh-entry">${icon("refresh")} Refresh QR</button></div>
-    ${state.config.demo ? '<p class="entry-note">Example QR only. This demonstration cannot be used for estate entry.</p>' : savedForUnit ? `<div class="entry-saved">${icon("shield")}<div><strong>Ready when you reopen Sesame</strong><p>Saved on this device until ${esc(new Date(state.savedPass.expiresAt).toLocaleDateString("en-SG", { day: "numeric", month: "short", timeZone: "Asia/Singapore" }))}.</p></div></div><button class="text-button" data-action="forget-entry">Forget saved entry pass</button>` : `<div class="entry-save"><button class="button full" data-action="save-entry" ${!passStore.available || state.savingPass ? "disabled" : ""}>${icon("qr")} Keep my entry pass on this device</button><p class="entry-note">Opens straight to your QR for 7 days. Use only on your own device: anyone who can open Sesame on it can show this pass. Your password and booking login are not saved.</p></div>`}
+    ${state.config.demo ? '<p class="entry-note">Example QR only. This demonstration cannot be used for estate entry.</p>' : savedForUnit ? `<div class="entry-saved">${icon("shield")}<div><strong>Ready when you reopen Sesame</strong><p>Saved until you forget it or sign out.</p></div></div><button class="text-button" data-action="forget-entry">Forget saved entry pass</button>` : `<div class="entry-save"><button class="button full" data-action="save-entry" ${!passStore.available || state.savingPass ? "disabled" : ""}>${icon("qr")} Keep my entry pass on this device</button><p class="entry-note">Saved until you forget it or sign out. Use a personal device. Your password is not saved.</p></div>`}
     ${!state.session ? '<p class="entry-note">Your entry pass is ready. Sign in when you want to book facilities.</p>' : ""}
   </section>`,
     "Entry QR",
@@ -429,7 +417,7 @@ function renderEntry() {
           if (generation !== entryGeneration) return;
           state.savedPass = saved;
           if (!savedPassReady())
-            return renderLogin("Sign in to renew your entry pass.");
+            return renderLogin("Sign in to show your entry QR.");
           pass = saved.pass;
         }
         if (generation !== entryGeneration || document.hidden) return;
@@ -508,8 +496,7 @@ function renderFacilities() {
     "All facilities",
     ...new Set(state.facilities.map((f) => f.category)),
   ];
-  renderShell(`<div class="page-heading"><div><h1>Your space, your pace.</h1><p>A place to gather. A moment to unwind. It’s all right here.</p></div><span class="date-caption">${icon("calendar")} ${dateFormat(state.config.today, { weekday: "short", year: "numeric" })}</span></div>
-    <section class="hero" aria-labelledby="hero-title">${image("/assets/estate.jpg", "Grand Dunman clubhouse overlooking the pool")}<div class="hero-copy"><span class="eyebrow">A LIFE WELL LIVED</span><h2 id="hero-title">A space for<br>every occasion.</h2><p>Bring your plans to life, just a few steps from home.</p><button class="button light" data-action="explore">Explore facilities ${icon("arrow")}</button></div><span class="hero-label">${icon("pin")} Grand Dunman</span></section>
+  renderShell(`<div class="page-heading"><div><h1>Facilities</h1></div><span class="date-caption">${icon("calendar")} ${dateFormat(state.config.today, { weekday: "short", year: "numeric" })}</span></div>
     <section id="facilities-section" aria-labelledby="facilities-title"><div class="facilities-toolbar"><div><h2 id="facilities-title">Find your space <span>${state.facilities.length} facilities</span></h2><p>Choose a facility and find a time that works for you.</p></div><label class="search">${icon("search")}<span class="visually-hidden">Search facilities</span><input id="facility-search" type="search" placeholder="Search facilities" value="${esc(state.search)}" autocomplete="off"></label></div>
       <div class="filters" aria-label="Filter facilities">${categories.map((c) => `<button class="filter ${state.filter === c ? "active" : ""}" data-action="filter" data-value="${esc(c)}" aria-pressed="${state.filter === c}">${esc(c)}</button>`).join("")}</div>
       <div class="facility-grid" id="facility-grid">${facilityCards()}</div>
@@ -519,9 +506,7 @@ function renderFacilities() {
 function resetSelection() {
   state.selectedSlot = null;
   state.quantity = 1;
-  state.rulesAccepted = false;
-  state.noticeAccepted = false;
-  state.preview = null;
+  state.bookingError = "";
 }
 
 function dateStrip() {
@@ -545,7 +530,7 @@ function slotMarkup() {
   return state.slots
     .map(
       (slot) =>
-        `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? "Available" : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button><button class="slot-details-button" data-action="slot-details" data-value="${esc(slot.id)}" aria-label="View details for ${esc(timeRange(slot.startTime, slot.endTime))}">View details ${icon("info")}</button></div>`,
+        `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? "Available" : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button></div>`,
     )
     .join("");
 }
@@ -553,34 +538,30 @@ function slotMarkup() {
 function summaryMarkup() {
   const slot = state.selectedSlot;
   if (!slot)
-    return `<h2>Your booking</h2><div class="summary-placeholder">${icon("calendar")}<strong>A little something to look forward to.</strong><p>Choose an available time to see your booking details here.</p></div><button class="button full" disabled>Choose a time ${icon("arrow")}</button><p class="summary-disclaimer">Nothing is reserved until you confirm.</p>`;
-  const incomplete = profileIncomplete();
+    return `<h2>Your booking</h2><div class="summary-placeholder">${icon("calendar")}<strong>Choose a time.</strong><p>Your date, time and price will appear here.</p></div><button class="button full" disabled>Choose a time ${icon("arrow")}</button><div class="form-error" role="alert">${esc(state.bookingError)}</div>`;
   return `<h2>Your booking</h2><p class="summary-facility">${esc(state.detail.name)}</p><dl>
     <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(slot.date, { weekday: "short" }))}</dd></div>
     <div class="summary-row"><dt>Time</dt><dd>${esc(timeRange(slot.startTime, slot.endTime))}</dd></div>
     <div class="summary-row"><dt>Unit</dt><dd>${esc(unitLabel(state.session.unit))}</dd></div>
     <div class="summary-row"><dt>Quantity</dt><dd>${slot.maxQuantity > 1 ? `<select id="booking-quantity" aria-label="Booking quantity">${Array.from({ length: slot.maxQuantity }, (_, i) => `<option value="${i + 1}" ${state.quantity === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select>` : "1 session"}</dd></div>
     </dl><div class="total-row"><span>Total</span><strong>${money(slot.price * state.quantity)}</strong></div><p class="summary-price-note">The estate’s price for this time slot. Review the facility information for fee and deposit details.</p>
-    <div class="rules-acceptance">${state.rulesAccepted ? `${icon("circleCheck")}<span>Facility rules accepted<br><button class="text-button" data-action="rules">Read again</button></span>` : `${icon("info")}<button class="text-button" data-action="rules">Read & accept the facility rules</button>`}</div>
-    ${state.detail.notice.show ? `<div class="notice"><div class="rules-content">${safeRichText(state.detail.notice.text)}</div><label class="check-label"><input type="checkbox" id="notice-accepted" ${state.noticeAccepted ? "checked" : ""}>I acknowledge this facility notice.</label></div>` : ""}
-    <button class="button full" data-action="${incomplete ? "profile" : "preview"}" ${!incomplete && (!state.rulesAccepted || (state.detail.notice.show && !state.noticeAccepted) || state.previewLoading) ? "disabled" : ""}>${state.previewLoading ? "Checking availability…" : incomplete ? "Complete profile to book" : "Review booking"} ${icon("arrow")}</button>
-    <p class="summary-disclaimer">${state.config.readOnly ? "Submissions are disabled in read-only mode." : "Nothing is reserved until you confirm."}</p>`;
+    <div class="form-error" role="alert">${esc(state.bookingError)}</div>
+    <button class="button full" id="book-submit" data-action="book" ${state.committing || state.config.readOnly ? "disabled" : ""}>${state.committing ? "Booking…" : state.config.readOnly ? "Read-only mode" : (state.config.demo ? "Book demo · " : "Book · ") + money(slot.price * state.quantity)} ${icon("arrow")}</button>
+    <p class="summary-disclaimer">${state.config.readOnly ? "Submissions are disabled in read-only mode." : "Tap Book to reserve this time."}</p>`;
 }
 
 function renderDetail() {
   const f = state.detail;
   document.title = `${f.name} · Grand Dunman`;
   renderShell(`<a class="back-link" href="#/facilities">${icon("back")} All facilities</a><div class="detail-heading"><p class="eyebrow">${esc(f.category)}</p><h1>${esc(f.name)}</h1></div>
-    <div class="detail-visual">${image(f.image, f.name)}<div class="detail-description"><span class="eyebrow">SPACE TO MAKE IT YOURS</span><h2>A little closer to home.</h2><p>${esc(excerpt(f.introduction))}</p><div class="detail-meta">${icon("calendar")} Plan up to four weeks ahead</div></div></div>
     <div class="booking-layout"><div><section class="panel" aria-labelledby="choose-date-title"><div class="panel-title"><h2 id="choose-date-title"><span class="step-number">1</span>Choose a date</h2><label><span class="visually-hidden">Booking date</span><input class="date-input" id="booking-date" type="date" min="${state.config.today}" max="${state.config.lastDate}" value="${state.date}"></label></div>
       <div class="calendar-nav"><button class="icon-button" data-action="week-prev" aria-label="Previous week" ${state.weekStart <= state.config.today ? "disabled" : ""}>${icon("back")}</button><strong>${esc(dateFormat(state.weekStart, { day: undefined, month: "long", year: "numeric" }))}</strong><button class="icon-button" data-action="week-next" aria-label="Next week" ${addDays(state.weekStart, 7) > state.config.lastDate ? "disabled" : ""}>${icon("arrow")}</button></div>
       <div class="date-strip">${dateStrip()}</div><div class="slot-heading"><h3>Available times</h3><span>Singapore time · SGT</span></div>
       ${!state.slotsLoading && state.slots.length && state.slots.every((s) => s.reason === "Unavailable") ? '<div class="not-released">The estate currently marks these times unavailable. Please check another date.</div>' : ""}
-      <div class="slots" id="slots" aria-live="polite">${slotMarkup()}</div><div class="availability-note">${icon("refresh")} Availability is checked again before you confirm.</div>
+      <div class="slots" id="slots" aria-live="polite">${slotMarkup()}</div><div class="availability-note">${icon("refresh")} Availability updates when you book.</div>
     </section>
-    <details class="panel rules-panel"><summary>Facility information ${icon("down")}</summary><div class="introduction-full">${esc(f.introduction || "No additional information has been supplied by the estate.")}</div></details>
-    <details class="panel rules-panel"><summary>Rules & regulations ${icon("down")}</summary><div class="rules-content">${safeRichText(f.regulations) || "<p>No additional rules have been supplied by the estate.</p>"}</div></details>
-    </div><aside class="panel summary-panel" id="booking-summary" aria-label="Your booking summary">${summaryMarkup()}</aside></div>`);
+    </div><aside class="panel summary-panel" id="booking-summary" aria-label="Your booking summary">${summaryMarkup()}</aside>
+    <details class="panel rules-panel facility-information"><summary>Facility information & rules ${icon("down")}</summary><div class="introduction-full">${esc(f.introduction || "")}</div><div class="rules-content">${safeRichText(f.regulations)}</div></details></div>`);
   const strip = document.querySelector(".date-strip");
   const selected = strip?.querySelector(".selected");
   if (selected && strip.scrollWidth > strip.clientWidth)
@@ -701,7 +682,6 @@ async function route() {
   const generation = ++state.routeGeneration;
   state.availabilityGeneration++;
   state.detail = null;
-  state.previewLoading = false;
   resetSelection();
   closeModal();
   const parts = location.hash.replace(/^#\/?/, "").split("/");
@@ -788,60 +768,6 @@ modal.addEventListener("click", (event) => {
   }
 });
 
-function showRules() {
-  if (!state.detail) return;
-  openModal(
-    "rules",
-    "A shared space, a little care.",
-    `<p class="modal-copy">Please read the estate’s rules for ${esc(state.detail.name)} before booking.</p><div class="modal-scroll rules-content" id="rules-scroll" tabindex="0" aria-label="Facility rules">${safeRichText(state.detail.regulations) || "<p>The estate has not supplied additional rules for this facility.</p>"}</div><p class="scroll-hint" id="scroll-hint">Read to the end to continue.</p><div class="modal-actions"><button class="button secondary" data-action="close-modal">Go back</button><button class="button" id="accept-rules" data-action="accept-rules" disabled>Accept facility rules ${icon("check")}</button></div>`,
-    "FACILITY RULES",
-  );
-  const scroll = document.querySelector("#rules-scroll");
-  const check = () => {
-    if (scroll.scrollHeight <= scroll.clientHeight + scroll.scrollTop + 6) {
-      document.querySelector("#accept-rules").disabled = false;
-      document.querySelector("#scroll-hint").textContent =
-        "By continuing, you agree to these facility rules.";
-    }
-  };
-  scroll.addEventListener("scroll", check);
-  requestAnimationFrame(check);
-}
-
-async function previewBooking() {
-  if (state.previewLoading || !state.selectedSlot) return;
-  const generation = state.routeGeneration;
-  state.previewLoading = true;
-  renderSummary();
-  try {
-    const preview = await api("/api/bookings/preview", {
-      facilityId: state.detail.id,
-      slotId: state.selectedSlot.id,
-      date: state.date,
-      quantity: state.quantity,
-      rulesAccepted: state.rulesAccepted,
-      noticeAccepted: state.noticeAccepted,
-    });
-    if (generation !== state.routeGeneration) return;
-    state.preview = preview;
-    showReview(preview);
-  } catch (error) {
-    if (generation !== state.routeGeneration) return;
-    if (error.code === "NOTICE_REQUIRED" && error.details?.notice) {
-      state.detail.notice = error.details.notice;
-      state.noticeAccepted = false;
-    }
-    toast(error.message, true);
-    if (["SLOT_UNAVAILABLE", "QUANTITY_UNAVAILABLE"].includes(error.code))
-      await loadAvailability(state.date);
-  } finally {
-    if (generation === state.routeGeneration) {
-      state.previewLoading = false;
-      renderSummary();
-    }
-  }
-}
-
 function reviewDetails(preview) {
   return `<div class="review-facility">${image(preview.facility.image, preview.facility.name)}<div><h3>${esc(preview.facility.name)}</h3><p>${esc(preview.unit.projectName)} · ${esc(unitLabel(preview.unit))}</p></div></div><dl class="review-details">
     <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(preview.date, { weekday: "short", year: "numeric" }))}</dd></div>
@@ -850,54 +776,74 @@ function reviewDetails(preview) {
     <div class="summary-row"><dt>Payment</dt><dd>${esc(preview.paymentMethod)}</dd></div></dl><div class="review-total"><span>Total amount</span><strong>${esc(money(preview.amount))}</strong></div>`;
 }
 
-function showReview(preview) {
-  openModal(
-    "review",
-    "Make a little room.",
-    `<p class="modal-copy">Take a moment to check your booking.</p>${reviewDetails(preview)}
-    <p class="review-note">${state.config.demo ? "This creates a demonstration booking only. No reservation or payment is sent to the estate." : state.config.readOnly ? "This is a read-only preview. Booking submissions are disabled on this server." : "Confirming submits this reservation to Grand Dunman. You’ll receive payment instructions next."}</p>
-    <div class="modal-actions"><button class="button secondary" data-action="close-modal">Go back</button><button class="button" data-action="commit" id="confirm-booking" ${state.config.readOnly ? "disabled" : ""}>${state.config.demo ? "Confirm demo booking" : state.config.readOnly ? "Submission disabled" : "Confirm booking"} ${icon("arrow")}</button></div><p class="expiry-note">Review valid for five minutes. Availability may change.</p>`,
-    "REVIEW YOUR BOOKING",
-  );
-}
-
-async function commitBooking() {
-  if (state.committing || !state.preview || state.config.readOnly) return;
+async function bookSelected() {
+  if (state.committing || !state.selectedSlot || state.config.readOnly) return;
+  const slot = state.selectedSlot;
+  const generation = state.routeGeneration;
+  const selection = {
+    facilityId: state.detail.id,
+    slotId: slot.id,
+    date: state.date,
+    quantity: state.quantity,
+    expectedAmount: slot.price * state.quantity,
+    expectedUnitId: state.session.unit.unitId,
+    expectedStartTime: slot.startTime,
+    expectedEndTime: slot.endTime,
+    confirm: true,
+  };
+  const receipt = {
+    facility: state.detail,
+    unit: state.session.unit,
+    date: state.date,
+    startTime: slot.startTime,
+    endTime: slot.endTime,
+    quantity: state.quantity,
+    amount: selection.expectedAmount,
+    paymentMethod: "Bank transfer / PayNow UEN",
+  };
   state.committing = true;
-  const preview = state.preview;
-  modal.querySelectorAll("button").forEach((button) => {
-    button.disabled = true;
-  });
-  document.querySelector("#confirm-booking").textContent =
-    "Submitting booking…";
+  state.bookingError = "";
+  renderSummary();
+  const controls = [...app.querySelectorAll("button, input, select")].map(
+    (element) => ({ element, disabled: element.disabled }),
+  );
+  for (const { element } of controls) element.disabled = true;
   try {
-    const result = await api("/api/bookings/commit", {
-      previewId: preview.previewId,
-      confirm: true,
-    });
+    const result = await api("/api/bookings", selection);
     state.committing = false;
-    if (state.session) showResult(result);
+    if (state.session && generation === state.routeGeneration)
+      showResult(result);
   } catch (error) {
     state.committing = false;
-    if (!state.session) return;
+    if (!state.session || generation !== state.routeGeneration) return;
     if (
       ["CONNECTION_INTERRUPTED", "INTERNAL_ERROR"].includes(error.code) ||
       !error.code
     ) {
       showResult({
-        ...preview,
+        ...receipt,
         status: "outcome_unknown",
         message:
-          "The connection was interrupted while submitting. Your reservation may have reached the estate. Check My bookings or the Intelliving app before trying again.",
+          "The booking result could not be confirmed. Check My bookings or Intelliving before trying again.",
       });
     } else {
-      openModal(
-        "submission-error",
-        "Let’s check that again.",
-        `<div class="form-error" role="alert">${esc(error.message)}</div><p class="modal-copy">Return to availability to review the current times and rules.</p><button class="button full" data-action="return-availability">Back to availability ${icon("back")}</button>`,
-        "BOOKING NOT COMPLETED",
-      );
+      if (
+        [
+          "BOOKING_CHANGED",
+          "SLOT_UNAVAILABLE",
+          "QUANTITY_UNAVAILABLE",
+          "UNIT_CHANGED",
+        ].includes(error.code)
+      )
+        await loadAvailability(selection.date);
+      if (generation === state.routeGeneration)
+        state.bookingError = error.message;
     }
+  } finally {
+    state.committing = false;
+    for (const { element, disabled } of controls)
+      if (element.isConnected) element.disabled = disabled;
+    if (generation === state.routeGeneration && state.session) renderSummary();
   }
 }
 
@@ -906,15 +852,14 @@ function bankInstructions() {
 }
 
 function showResult(result) {
-  state.preview = result;
   const ok = result.status === "payment_pending";
   openModal(
     "result",
     ok
       ? state.config.demo
         ? "Your demo booking is ready."
-        : "You’ve made room."
-      : "Your booking needs a check.",
+        : "Booking submitted."
+      : "Booking status unconfirmed.",
     `<div class="result-icon">${icon(ok ? "calendarCheck" : "info")}</div><p class="modal-copy">${esc(state.config.demo && ok ? "This reservation exists only in the offline demonstration. No payment is needed." : result.message)}</p>${reviewDetails(result)}
     ${result.orderNo ? `<span class="result-reference">Order reference: ${esc(result.orderNo)}</span>` : ""}${result.bookingId ? `<span class="result-reference">Booking reference: ${esc(result.bookingId)}</span>` : ""}
     ${ok && !state.config.demo ? bankInstructions() : ""}
@@ -927,14 +872,7 @@ function showResult(result) {
 function showBookingDetails(id) {
   const booking = state.bookings.find((b) => b.id === id);
   if (!booking) return;
-  if (booking.receipt) {
-    showResult(booking.receipt);
-    const additionalDetails = document.createElement("details");
-    additionalDetails.className = "booking-metadata";
-    additionalDetails.innerHTML = `<summary>More booking details</summary>${ownBookingMetadata(booking)}`;
-    modal.querySelector(".modal-actions").before(additionalDetails);
-    return;
-  }
+  if (booking.receipt) return showResult(booking.receipt);
   openModal(
     "booking-details",
     booking.facilityName,
@@ -961,134 +899,7 @@ function ownBookingMetadata(booking) {
     ],
     ["Booking reference", booking.id],
     ["Order reference", booking.orderNo],
-    ["Schedule reference", booking.facilityDetailId],
-    ["Booking created (as reported)", booking.createdAt],
-    ["Booking updated (as reported)", booking.updatedAt],
   ]);
-}
-
-async function showSlotDetails(slotId) {
-  const slot = state.slots.find((candidate) => candidate.id === slotId);
-  if (!slot || !state.detail || !state.session?.unit) return;
-  const generation = ++state.inspectionGeneration;
-  const routeGeneration = state.routeGeneration;
-  const selectedUnit = state.session.unit;
-  const facility = state.detail;
-  const details = slot.details || {};
-  const flagLabel = (value) =>
-    value == null ? "Not provided" : value ? "Yes" : "No";
-  const checkedAt = state.availabilityCheckedAt
-    ? new Date(state.availabilityCheckedAt).toLocaleString("en-SG", {
-        timeZone: "Asia/Singapore",
-        hour12: false,
-      })
-    : null;
-  openModal(
-    "slot-details",
-    "Session details",
-    `<p class="modal-copy">${esc(facility.name)}<br>${esc(dateFormat(slot.date, { weekday: "short", year: "numeric" }))} · ${esc(timeRange(slot.startTime, slot.endTime))} SGT</p>${metadataRows(
-      [
-        ["Availability", slot.enabled ? "Available" : slot.reason],
-        ["Slot rate", money(slot.price)],
-        ["Listed facility rate", money(facility.indicativePrice)],
-        ["Booking capacity", details.capacity],
-        ["Remaining capacity", details.remainingCapacity],
-        ["Capacity unavailable", details.unavailableCapacity],
-        ["Per-booking limit", slot.maxQuantity],
-        ["Booking flag set", flagLabel(details.bookingFlag)],
-        ["Reservations permitted", flagLabel(details.reservationAllowed)],
-        ["Schedule enabled", flagLabel(details.scheduleEnabled)],
-        ["Schedule created (as reported)", details.scheduleCreatedAt],
-        ["Schedule updated (as reported)", details.scheduleUpdatedAt],
-        ["Availability checked (SGT)", checkedAt],
-        ["Schedule reference", slot.id],
-      ],
-    )}<p class="inspection-note">Capacity can include reservations, holds or blocks. Schedule timestamps describe the time slot, not when someone booked it.</p><section class="slot-own-bookings" aria-labelledby="slot-own-bookings-title"><h3 id="slot-own-bookings-title">Your unit at this time</h3><div id="slot-own-bookings" aria-live="polite"><p class="modal-copy">Checking your unit’s bookings…</p></div></section><p class="inspection-note">Other residents’ names and home-unit numbers are not shown.</p><div class="modal-actions"><button class="button secondary" data-action="close-modal">Close</button></div>`,
-    "AVAILABILITY DETAILS",
-  );
-  try {
-    const [current, unpaid] = await Promise.all([
-      api("/api/bookings?tab=current"),
-      api("/api/bookings?tab=unpaid"),
-    ]);
-    if (
-      generation !== state.inspectionGeneration ||
-      routeGeneration !== state.routeGeneration ||
-      state.modalType !== "slot-details" ||
-      !modal.open
-    )
-      return;
-    const matches = [
-      ...new Map(
-        [...current, ...unpaid]
-          .filter(
-            (booking) =>
-              booking.unit?.unitId === selectedUnit.unitId &&
-              booking.facilityId === facility.id &&
-              booking.facilityDetailId === slot.id,
-          )
-          .map((booking) => [booking.id, booking]),
-      ).values(),
-    ];
-    document.querySelector("#slot-own-bookings").innerHTML = matches.length
-      ? matches
-          .map(
-            (booking) =>
-              `<div class="own-slot-booking">${ownBookingMetadata(booking)}</div>`,
-          )
-          .join("")
-      : '<p class="modal-copy">No booking for your unit could be linked to this session. This does not identify who reserved it.</p>';
-  } catch (error) {
-    if (
-      generation !== state.inspectionGeneration ||
-      routeGeneration !== state.routeGeneration ||
-      state.modalType !== "slot-details" ||
-      !modal.open
-    )
-      return;
-    const target = document.querySelector("#slot-own-bookings");
-    if (target)
-      target.innerHTML = `<p class="form-error" role="alert">${esc(error.message)}</p>`;
-  }
-}
-
-function showProfile() {
-  const user = state.session?.user;
-  if (!user || !profileIncomplete()) return;
-  const needsEmail = user.needsEmail;
-  openModal(
-    "profile",
-    needsEmail ? "Complete your owner profile." : "Set your new password.",
-    `<p class="modal-copy">${needsEmail ? "Intelliving requires a verified email and a completed profile before booking." : "Your account uses a temporary password. Verify your email and choose a new password."} This updates your estate login. Sign in again afterwards with your email and new password.</p>
-    ${state.config.readOnly ? '<p class="review-note">Profile updates and verification emails are disabled in read-only mode.</p>' : ""}
-    <form class="profile-form" id="profile-form"><div class="form-error" id="profile-error" role="alert"></div>
-      <label class="form-field"><span>Email address</span><input name="email" type="email" autocomplete="email" value="${esc(user.email)}" required ${!needsEmail ? "readonly" : ""}></label>
-      <label class="form-field"><span>Email verification code</span><div class="code-field"><input name="verification" required maxlength="32" autocomplete="one-time-code" placeholder="Enter the email code"><button type="button" class="button secondary" data-action="send-code" ${state.config.readOnly ? "disabled" : ""}>Send email code</button></div><span class="field-note" id="code-status" role="status"></span></label>
-      ${needsEmail ? `<div class="field-grid"><label class="form-field"><span>Your name</span><input name="username" required maxlength="120" autocomplete="name" value="${esc(user.name)}"></label><label class="form-field"><span>Phone (optional)</span><input name="phone" type="tel" maxlength="40" autocomplete="tel" value="${esc(user.phone)}"></label></div>` : ""}
-      <div class="field-grid"><label class="form-field"><span>New password</span><input name="cipher" type="password" required maxlength="300" autocomplete="new-password"></label><label class="form-field"><span>Confirm new password</span><input name="confirmPassword" type="password" required maxlength="300" autocomplete="new-password"></label></div>
-      <label class="check-label"><input name="confirm" type="checkbox" required>I confirm these changes to my estate account and login.</label>
-      <div class="modal-actions"><button type="button" class="button secondary" data-action="close-modal">Go back</button><button class="button" type="submit" ${state.config.readOnly ? "disabled" : ""}>Update & sign in again</button></div>
-    </form>`,
-    "OWNER ACCOUNT",
-  );
-}
-
-async function sendProfileCode(button) {
-  const form = document.querySelector("#profile-form");
-  const email = form.elements.email;
-  if (!email.reportValidity()) return;
-  button.disabled = true;
-  const status = document.querySelector("#code-status");
-  try {
-    await api("/api/profile/code", { email: email.value });
-    status.textContent = "Verification code sent. Check your email.";
-    setTimeout(() => {
-      if (button.isConnected) button.disabled = false;
-    }, 60_000);
-  } catch (error) {
-    document.querySelector("#profile-error").textContent = error.message;
-    button.disabled = false;
-  }
 }
 
 document.addEventListener("submit", async (event) => {
@@ -1132,29 +943,6 @@ document.addEventListener("submit", async (event) => {
         button.innerHTML = `${state.config.demo ? "Explore the demo" : "Sign in"} ${icon("arrow")}`;
       }
     }
-  } else if (form.id === "profile-form") {
-    event.preventDefault();
-    const button = form.querySelector('button[type="submit"]');
-    if (button.disabled) return;
-    const body = {
-      ...Object.fromEntries(new FormData(form)),
-      confirm: form.elements.confirm.checked,
-    };
-    button.disabled = true;
-    try {
-      await api("/api/profile/complete", body);
-      body.cipher = body.confirmPassword = "";
-      state.session = null;
-      state.routeGeneration++;
-      closeModal();
-      renderLogin(
-        "Your profile was updated. Sign in with your email and new password.",
-      );
-    } catch (error) {
-      if (document.querySelector("#profile-error"))
-        document.querySelector("#profile-error").textContent = error.message;
-      button.disabled = false;
-    }
   }
 });
 
@@ -1196,9 +984,7 @@ document.addEventListener("change", async (event) => {
     await loadAvailability(target.value);
   } else if (target.id === "booking-quantity") {
     state.quantity = Number(target.value);
-    renderSummary();
-  } else if (target.id === "notice-accepted") {
-    state.noticeAccepted = target.checked;
+    state.bookingError = "";
     renderSummary();
   }
 });
@@ -1288,20 +1074,15 @@ document.addEventListener("click", async (event) => {
       if (!slot?.enabled) return;
       state.selectedSlot = slot;
       state.quantity = 1;
-      state.preview = null;
+      state.bookingError = "";
       document.querySelector("#slots").innerHTML = slotMarkup();
       renderSummary();
-    } else if (action === "slot-details")
-      await showSlotDetails(button.dataset.value);
-    else if (action === "refresh-slots") await loadAvailability(state.date);
-    else if (action === "rules") showRules();
-    else if (action === "accept-rules") {
-      state.rulesAccepted = true;
-      closeModal();
-      renderSummary();
-    } else if (action === "close-modal") closeModal();
-    else if (action === "preview") await previewBooking();
-    else if (action === "commit") await commitBooking();
+      document
+        .querySelector("#booking-summary")
+        ?.scrollIntoView({ block: "nearest" });
+    } else if (action === "refresh-slots") await loadAvailability(state.date);
+    else if (action === "close-modal") closeModal();
+    else if (action === "book") await bookSelected();
     else if (action === "return-availability") {
       closeModal();
       await loadAvailability(state.date);
@@ -1329,8 +1110,6 @@ document.addEventListener("click", async (event) => {
       }
     } else if (action === "booking-details")
       showBookingDetails(button.dataset.value);
-    else if (action === "profile") showProfile();
-    else if (action === "send-code") await sendProfileCode(button);
   } catch (error) {
     toast(error.message, true);
     if (button.isConnected) button.disabled = false;
@@ -1371,7 +1150,7 @@ document.addEventListener("visibilitychange", () => {
     document.querySelector("#entry-qr")?.replaceChildren();
     return;
   }
-  // Returning from Mail/SMS must not discard a profile form or a booking review.
+  // Returning from another app must not discard an open dialog.
   if (state.committing || modal.open) return;
   if (state.session || savedPassReady()) {
     if (location.hash !== "#/qr") location.hash = "#/qr";
