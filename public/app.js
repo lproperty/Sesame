@@ -420,6 +420,7 @@ function renderEntry() {
           const session = await api("/api/session");
           if (generation !== entryGeneration) return;
           state.session = session;
+          updateConfig(session);
           if (state.savedPass && !savedPassMatches(session))
             await forgetEntry();
           pass = entryPassFromSession(session);

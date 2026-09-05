@@ -36,7 +36,7 @@ const source = sourceModule.replace(
 );
 
 async function fixture(t, options = {}) {
-  const now = () => Date.parse("2026-09-05T08:00:00Z");
+  const now = options.now || (() => Date.parse("2026-09-05T08:00:00Z"));
   const demo = createDemoUpstream({ now });
   const calls = [];
   const upstream = async (op, body, context) => {
@@ -524,6 +524,23 @@ test("returning to Sesame shows a fresh QR and preserves an open profile or book
     null,
     "Returning must not discard an active dialog.",
   );
+});
+
+test("refreshing the entry screen past Singapore midnight updates the booking date", async (t) => {
+  let time = Date.parse("2026-09-05T15:59:50Z");
+  const f = await fixture(t, { browserLive: true, now: () => time });
+  await f.login({ stayOnQr: true });
+  time += 20_000;
+  f.query('[data-action="refresh-entry"]').click();
+  await f.until(() => f.query("#entry-qr svg"), "QR refreshed after midnight");
+  f.query('.mobile-nav a[href="#/facilities"]').click();
+  await f.until(
+    () => f.all(".facility-card").length === 11,
+    "facilities after midnight",
+  );
+  f.query(".facility-card").click();
+  await f.until(() => f.query("#booking-date"), "booking date after midnight");
+  assert.equal(f.query("#booking-date").value, "2026-09-06");
 });
 
 test("sign-out clears a saved entry pass as well as the live session", async (t) => {

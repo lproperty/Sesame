@@ -63,7 +63,7 @@ Before a manual publication, run `npm run audit:publication` in the staged Git c
 
 ## Validation
 
-The 58 automated checks cover QR decoding with an independent decoder, native payload compatibility, first-screen routing, encrypted saved-pass restoration, tamper/expiry rejection, forgetting/sign-out, and account changes. They also cover the browser client, built module graph, booking/payment flows against a mocked estate API, profile gates, sanitization, session expiry, origin/CSRF protection, stale reviews, duplicate confirmations and ambiguous failures.
+The 59 automated checks cover QR decoding with an independent decoder, native payload compatibility, first-screen routing, encrypted saved-pass restoration, tamper/expiry rejection, forgetting/sign-out, account changes and Singapore date rollover. They also cover the browser client, built module graph, booking/payment flows against a mocked estate API, profile gates, sanitization, session expiry, origin/CSRF protection, stale reviews, duplicate confirmations and ambiguous failures.
 
 Authenticated live login, facility details, availability, booking-list reads and CORS response headers were also checked without making reservations, orders, payments, verification-email requests or profile changes. A physical iPhone/browser rendering check was unavailable; DOM tests do not validate native layout or Safari's browser enforcement.
 
