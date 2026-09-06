@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  verify:
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -24,36 +24,63 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - name: Set up Node.js LTS
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"
-          cache: npm
       - name: Install locked test dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Check public source for private files and credential patterns
         run: npm run audit:publication
       - name: Run syntax, application and security tests
         run: npm run check
-      - name: Build and verify the example artifact
-        if: github.event_name == 'pull_request'
+      - name: Verify an example build without deployment settings
         run: npm run build:pages
+
+  # Tests execute npm dependencies. Build the production artifact from a fresh
+  # checkout on a different runner, with no dependency install or shared cache.
+  build:
+    if: github.repository == 'lproperty/Sesame' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    environment: pages-build
+    steps:
+      - name: Check out the verified commit without saving credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Set up Node.js without dependency caching
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+      - name: Check the clean source for private files
+        run: node scripts/audit-publication.mjs
       - name: Build and verify the live frontend artifact
-        if: github.repository == 'lproperty/Sesame' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         env:
           SESAME_SITE_CONFIG: ${{ secrets.SESAME_SITE_CONFIG }}
-        run: npm run build:pages -- --live
-      - name: Upload only the verified website
-        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
+        run: node scripts/build-pages.mjs --live
+      # Package directly so no composite action can fetch a mutable nested tag.
+      - name: Package only the verified website
+        run: tar --directory dist --create --file "$RUNNER_TEMP/artifact.tar" .
+      - name: Upload the immutable Pages artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          path: dist
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
           retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
 
   deploy:
-    if: github.repository == 'lproperty/Sesame' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: github.repository == 'lproperty/Sesame' && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       pages: write
