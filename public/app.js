@@ -284,7 +284,7 @@ function renderLogin(message = "") {
         </form>
         ${state.config.staticDemo ? "" : '<div class="login-help"><span class="muted field-note">Signing in as a unit owner</span><button class="text-button" data-action="login-help">Need help signing in?</button></div>'}
         <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : state.config.browserClient ? "Sign-in goes directly to your estate over HTTPS." : "A private connection to your estate account."}</p>
-        ${state.config.browserClient ? '<p class="field-note">Your session lasts in this tab only. Refreshing requires a new sign-in. Sesame is an independent resident portal.</p>' : ""}
+        ${state.config.browserClient ? '<p class="field-note">You stay signed in when this tab refreshes. Your password is never saved. Sesame is an independent resident portal.</p>' : ""}
         ${savedPassReady() && !state.config.demo ? '<button class="text-button full" data-action="show-entry">Back to my entry QR</button>' : ""}
       </div>
       <div class="login-bottom">Sesame &nbsp; · &nbsp; Spaces for the way you live</div>
