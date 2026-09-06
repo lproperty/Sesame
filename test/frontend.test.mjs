@@ -246,6 +246,140 @@ async function fixture(t, options = {}) {
   };
 }
 
+for (const browserLive of [false, true]) {
+  test(`existing pending reservation supports payment and cancellation in ${browserLive ? "Pages" : "local server"} UI`, async (t) => {
+    const f = await fixture(t, { browserLive });
+    f.demo.bookings.push({
+      id: "existing-booking",
+      facilityId: "demo-facility-1",
+      facilityDetailId: "demo-facility-1-2026-09-06-0",
+      unitId: "demo-unit-1",
+      facilityName: "Jewel Function Room 1",
+      startTime: "2026-09-06 09:00:00",
+      endTime: "2026-09-06 15:00:00",
+      bookingNum: 1,
+      pricing: 116.35,
+      paidTotal: 116.35,
+      status: 0,
+    });
+    f.demo.orders.set("EXISTING-ORDER", {
+      requestNo: "EXISTING-ORDER",
+      makeId: "existing-booking",
+      orderType: 0,
+      unitId: "demo-unit-1",
+      status: 1,
+      transType: "LOCAL_CASH",
+    });
+    await f.login();
+    f.window.location.hash = "#/bookings/unpaid";
+    await f.until(
+      () => f.query('[data-action="booking-details"]'),
+      "existing reservation",
+    );
+    f.query('[data-action="booking-details"]').click();
+    assert.ok(f.query('[data-action="complete-payment"]'));
+    assert.ok(f.query('[data-action="cancel-booking"]'));
+    f.query('[data-action="complete-payment"]').click();
+    await f.until(
+      () => /EXISTING-ORDER/.test(f.query("#modal").textContent),
+      "recovered order",
+    );
+    assert.match(f.query("#modal").textContent, /S\$116.35/);
+    if (browserLive) assert.ok(f.query(".payment-qr svg"));
+    else assert.equal(f.query(".payment-qr"), null);
+    assert.equal(
+      f.writes().length,
+      0,
+      "Existing payments must not create another reservation or order",
+    );
+    f.query('[data-action="payment-status"]').click();
+    await f.until(
+      () => !f.query('[data-action="payment-status"]').disabled,
+      "payment check",
+    );
+    assert.match(f.query("#payment-status").textContent, /still pending/);
+    f.query('[data-action="cancel-booking"]').click();
+    assert.match(f.query("#modal").textContent, /Cancel this reservation/);
+    f.query('[data-action="booking-details"]').click();
+    assert.equal(
+      f.writes().length,
+      0,
+      "Keeping the reservation must not cancel it",
+    );
+    f.query('[data-action="cancel-booking"]').click();
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    await f.until(
+      () => !f.query("#modal").open && f.query(".empty-state"),
+      "cancelled reservation removed",
+    );
+    assert.deepEqual(f.writes(), ["cancelBooking"]);
+    assert.equal(f.demo.bookings.length, 0);
+    assert.deepEqual(f.consoleErrors, []);
+  });
+}
+
+test("paid reservation status removes payment and cancellation controls and refreshes the pending list", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  await f.login();
+  await f.chooseSlot();
+  f.query("#book-submit").click();
+  await f.until(() => f.query('[data-action="go-bookings"]'), "booking result");
+  f.query('[data-action="go-bookings"]').click();
+  await f.until(
+    () => f.query('[data-action="booking-details"]'),
+    "pending reservation",
+  );
+  f.query('[data-action="booking-details"]').click();
+  f.demo.orders.get("DEMO-00001").status = 2;
+  f.query('[data-action="payment-status"]').click();
+  await f.until(
+    () => /Payment received/.test(f.query("#payment-status")?.textContent),
+    "paid status",
+  );
+  assert.equal(f.query('[data-action="complete-payment"]'), null);
+  assert.equal(f.query('[data-action="cancel-booking"]'), null);
+  assert.equal(f.all(".booking-row").length, 0);
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("a declined cancellation remains visible and can be dismissed without removing the booking", async (t) => {
+  const f = await fixture(t, {
+    override: async (operation) => {
+      if (operation === "cancelBooking")
+        throw new AppError(
+          "Cancellation declined by the estate.",
+          422,
+          "ESTATE_REJECTED",
+        );
+    },
+  });
+  await f.login();
+  await f.chooseSlot();
+  f.query("#book-submit").click();
+  await f.until(() => f.query('[data-action="go-bookings"]'), "booking result");
+  f.query('[data-action="go-bookings"]').click();
+  await f.until(
+    () => f.query('[data-action="booking-details"]'),
+    "pending reservation",
+  );
+  f.query('[data-action="booking-details"]').click();
+  f.query('[data-action="cancel-booking"]').click();
+  f.query('[data-action="confirm-cancel-booking"]').click();
+  await f.until(
+    () =>
+      /Cancellation declined/.test(f.query("#reservation-error")?.textContent),
+    "estate cancellation error",
+  );
+  assert.equal(
+    f.query('[data-action="confirm-cancel-booking"]').disabled,
+    false,
+  );
+  assert.equal(f.all(".booking-row").length, 1);
+  f.query('[data-action="booking-details"]').click();
+  assert.ok(f.query('[data-action="complete-payment"]'));
+  assert.deepEqual(f.consoleErrors, []);
+});
+
 test("frontend signs in, filters, previews, submits once to the simulator, and shows its pending booking", async (t) => {
   const f = await fixture(t);
   assert.equal(f.query("#username").value, "demo");
@@ -375,6 +509,19 @@ test("Pages booking flow creates only a simulated reservation and never displays
   await f.until(
     () => /still pending/.test(f.query("#payment-status")?.textContent),
     "simulated payment status",
+  );
+  f.query('[data-action="complete-payment"]').click();
+  await f.until(
+    () =>
+      !f.query('[data-action="complete-payment"]').disabled &&
+      /No payment is needed/.test(f.query("#modal").textContent),
+    "simulated payment instructions",
+  );
+  f.query('[data-action="cancel-booking"]').click();
+  f.query('[data-action="confirm-cancel-booking"]').click();
+  await f.until(
+    () => !f.query("#modal").open && f.query(".empty-state"),
+    "simulated cancellation",
   );
   assert.deepEqual(f.networkAttempts, []);
   assert.deepEqual(f.calls, []);

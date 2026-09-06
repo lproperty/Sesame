@@ -256,6 +256,34 @@ export function createDemoRequest({ now = Date.now } = {}) {
     }
     if (route === "POST /api/bookings/preview") return reviewBooking(body);
     if (route === "POST /api/bookings/commit") return commitBooking(body);
+    const reservation =
+      /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel)$/.exec(
+        url.pathname,
+      );
+    if (reservation && (method === "POST" || reservation[2] === "payment")) {
+      const booking = bookings.find(
+        (b) => b.id === reservation[1] && b.unitId === unit.unitId,
+      );
+      if (!booking)
+        throw new AppError("Demo booking not found.", 404, "BOOKING_NOT_FOUND");
+      if (method === "POST" && body.confirm !== true)
+        throw new AppError(
+          "Confirm this reservation action.",
+          400,
+          "CONFIRMATION_REQUIRED",
+        );
+      if (reservation[2] === "cancel") {
+        bookings.splice(bookings.indexOf(booking), 1);
+        for (const [id, review] of reviews)
+          if (review.result?.bookingId === booking.id) reviews.delete(id);
+        return { status: "cancelled", bookingId: booking.id };
+      }
+      return {
+        booking: { ...normalizeBooking(booking, "unpaid"), unit: { ...unit } },
+        orderNo: booking.orderNo,
+        status: "pending",
+      };
+    }
     if (route === "GET /api/bookings") {
       const tab = url.searchParams.get("tab") || "current";
       if (!["current", "history", "unpaid"].includes(tab))

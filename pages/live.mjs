@@ -187,6 +187,22 @@ export function createLiveRequest({
       return portal.preview(active, body);
     if (action === "POST /api/bookings/commit")
       return mutation(() => portal.commit(active, body));
+    const reservation =
+      /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel)$/.exec(
+        url.pathname,
+      );
+    if (reservation) {
+      if (method === "GET" && reservation[2] === "payment")
+        return portal.bookingPayment(active, reservation[1]);
+      if (method === "POST" && reservation[2] === "payment")
+        return mutation(() =>
+          portal.resumePayment(active, reservation[1], body),
+        );
+      if (method === "POST" && reservation[2] === "cancel")
+        return mutation(() =>
+          portal.cancelReservation(active, reservation[1], body),
+        );
+    }
     const payment = /^\/api\/payments\/([a-zA-Z0-9_-]+)$/.exec(url.pathname);
     if (method === "GET" && payment)
       return portal.paymentStatus(active, payment[1]);

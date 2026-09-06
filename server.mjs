@@ -258,6 +258,30 @@ export function createApplication({
           return json(res, 200, await portal.book(session, body));
         if (req.method === "POST" && url.pathname === "/api/bookings/commit")
           return json(res, 200, await portal.commit(session, body));
+        const reservation =
+          /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel)$/.exec(
+            url.pathname,
+          );
+        if (reservation) {
+          if (req.method === "GET" && reservation[2] === "payment")
+            return json(
+              res,
+              200,
+              await portal.bookingPayment(session, reservation[1]),
+            );
+          if (req.method === "POST" && reservation[2] === "payment")
+            return json(
+              res,
+              200,
+              await portal.resumePayment(session, reservation[1], body),
+            );
+          if (req.method === "POST" && reservation[2] === "cancel")
+            return json(
+              res,
+              200,
+              await portal.cancelReservation(session, reservation[1], body),
+            );
+        }
         const paymentMatch = /^\/api\/payments\/([a-zA-Z0-9_-]+)$/.exec(
           url.pathname,
         );

@@ -55,6 +55,302 @@ async function setup(options = {}) {
 
 const matches = (code) => (error) => error.code === code;
 
+async function reserve(f) {
+  const quote = await f.preview();
+  return f.portal.commit(f.session, {
+    previewId: quote.previewId,
+    confirm: true,
+  });
+}
+
+test("existing reservations recover their payment order after sign-in without inserting or charging again", async () => {
+  const f = await setup();
+  const result = await reserve(f);
+  // Native booking lists may omit the order reference. Recover it from the
+  // authenticated order list using makeId, not a client-provided reference.
+  delete f.demo.bookings[0].orderNo;
+  const session = await f.portal.login(credentials);
+  const before = f.writes().length;
+  const payment = await f.portal.bookingPayment(session, result.bookingId);
+  assert.equal(payment.orderNo, result.orderNo);
+  assert.equal(payment.status, "pending");
+  assert.equal(payment.booking.receipt, undefined);
+  assert.equal(
+    (await f.portal.resumePayment(session, result.bookingId, { confirm: true }))
+      .orderNo,
+    result.orderNo,
+  );
+  assert.equal(f.writes().length, before);
+  f.demo.orders.get(result.orderNo).status = 2;
+  assert.equal(
+    (await f.portal.bookingPayment(session, result.bookingId)).status,
+    "paid",
+  );
+  await assert.rejects(
+    f.portal.cancelReservation(session, result.bookingId, { confirm: true }),
+    matches("BOOKING_NOT_PENDING"),
+  );
+  assert.equal(f.writes().length, before);
+});
+
+test("payment setup uses the existing reservation's price and ID and is only performed once", async () => {
+  const f = await setup();
+  const result = await reserve(f);
+  delete f.demo.bookings[0].orderNo;
+  f.demo.orders.clear();
+  const session = await f.portal.login(credentials);
+  assert.equal(
+    (await f.portal.bookingPayment(session, result.bookingId)).status,
+    "not_started",
+  );
+  const before = f.writes().length;
+  const body = {
+    confirm: true,
+    makeId: "foreign",
+    orderNo: "foreign",
+    price: 0,
+    unitId: "foreign",
+    transAmount: 0,
+  };
+  const payment = await f.portal.resumePayment(session, result.bookingId, body);
+  assert.equal(payment.status, "pending");
+  await f.portal.resumePayment(session, result.bookingId, body);
+  const writes = f.writes().slice(before);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].op, "createOrder");
+  assert.equal(writes[0].body.makeId, result.bookingId);
+  assert.equal(writes[0].body.price, 11635);
+  assert.equal(writes[0].body.transAmount, 11635);
+  assert.equal(writes[0].body.unitId, session.unit.unitId);
+  assert.equal(writes[0].body.transType, "LOCAL_CASH");
+});
+
+test("an order on a later page is recovered without creating a duplicate payment", async () => {
+  const pages = [];
+  const f = await setup({
+    override: async (op, body, context, demo) => {
+      if (op !== "orders") return undefined;
+      pages.push(body.pageIndex);
+      return body.pageIndex === 1
+        ? {
+            list: Array.from({ length: 50 }, (_, i) => ({
+              makeId: `other-${i}`,
+              orderType: 0,
+            })),
+            total: 51,
+          }
+        : { list: [...demo.orders.values()], total: 51 };
+    },
+  });
+  const result = await reserve(f);
+  delete f.demo.bookings[0].orderNo;
+  const session = await f.portal.login(credentials);
+  const before = f.writes().length;
+  assert.equal(
+    (await f.portal.resumePayment(session, result.bookingId, { confirm: true }))
+      .orderNo,
+    result.orderNo,
+  );
+  assert.deepEqual(pages, [1, 2]);
+  assert.equal(f.writes().length, before);
+});
+
+test("recovering an order after a lost setup response unlocks later bookings", async () => {
+  const f = await setup({
+    override: async (op, body, context, demo) => {
+      if (op === "createOrder") {
+        await demo(op, body, context);
+        throw new AppError("Response lost.", 502, "UPSTREAM_UNREACHABLE");
+      }
+    },
+  });
+  const result = await reserve(f);
+  assert.equal(result.status, "order_unconfirmed");
+  const scope = f.portal.scope(f.session);
+  assert.equal(f.portal.actions.get(scope).uncertain, true);
+  assert.equal(
+    (await f.portal.bookingPayment(f.session, result.bookingId)).status,
+    "pending",
+  );
+  assert.equal(f.portal.actions.get(scope).uncertain, false);
+  assert.equal(f.writes().filter((c) => c.op === "createOrder").length, 1);
+});
+
+test("expired payment orders can be renewed without recreating the booking or reusing the expired reference", async () => {
+  const f = await setup();
+  const result = await reserve(f);
+  f.demo.orders.get(result.orderNo).status = 4;
+  assert.equal(
+    (await f.portal.bookingPayment(f.session, result.bookingId)).status,
+    "expired",
+  );
+  const payment = await f.portal.resumePayment(f.session, result.bookingId, {
+    confirm: true,
+  });
+  assert.notEqual(payment.orderNo, result.orderNo);
+  // Simulate a stale booking list still carrying the old reference.
+  f.demo.bookings[0].orderNo = result.orderNo;
+  assert.equal(
+    (await f.portal.bookingPayment(f.session, result.bookingId)).orderNo,
+    payment.orderNo,
+  );
+  await f.portal.resumePayment(f.session, result.bookingId, { confirm: true });
+  assert.equal(f.writes().filter((c) => c.op === "insertBooking").length, 1);
+  assert.equal(f.writes().filter((c) => c.op === "createOrder").length, 2);
+});
+
+test("cancellation verifies the selected unit and pending state, then releases the slot and clears cached receipts", async () => {
+  const f = await setup();
+  const result = await reserve(f);
+  await assert.rejects(
+    f.portal.cancelReservation(f.session, result.bookingId, {}),
+    matches("CONFIRMATION_REQUIRED"),
+  );
+  f.portal.switchUnit(f.session, "demo-unit-2");
+  await assert.rejects(
+    f.portal.cancelReservation(f.session, result.bookingId, { confirm: true }),
+    matches("BOOKING_NOT_FOUND"),
+  );
+  await assert.rejects(
+    f.portal.bookingPayment(f.session, result.bookingId),
+    matches("BOOKING_NOT_FOUND"),
+  );
+  assert.equal(f.writes().filter((c) => c.op === "cancelBooking").length, 0);
+  f.portal.switchUnit(f.session, "demo-unit-1");
+  assert.equal(
+    (
+      await f.portal.cancelReservation(f.session, result.bookingId, {
+        confirm: true,
+        projectId: "foreign",
+      })
+    ).status,
+    "cancelled",
+  );
+  assert.deepEqual(f.writes().at(-1).body, {
+    id: result.bookingId,
+    projectId: "demo-project",
+  });
+  assert.equal((await f.portal.bookings(f.session, "unpaid")).length, 0);
+  const availability = await f.portal.availability(
+    f.session,
+    f.previewBody.facilityId,
+    DAY,
+  );
+  assert.equal(availability.slots[0].enabled, true);
+  const replacement = await reserve(f);
+  assert.notEqual(replacement.bookingId, result.bookingId);
+  await assert.rejects(
+    f.portal.cancelReservation(f.session, result.bookingId, { confirm: true }),
+    matches("BOOKING_NOT_FOUND"),
+  );
+});
+
+test("read-only mode permits payment checks and blocks payment setup and cancellation before upstream work", async () => {
+  const f = await setup();
+  const result = await reserve(f);
+  f.portal.readOnly = true;
+  assert.equal(
+    (await f.portal.bookingPayment(f.session, result.bookingId)).status,
+    "pending",
+  );
+  const before = f.calls.length;
+  await assert.rejects(
+    f.portal.resumePayment(f.session, result.bookingId, { confirm: true }),
+    matches("READ_ONLY"),
+  );
+  await assert.rejects(
+    f.portal.cancelReservation(f.session, result.bookingId, { confirm: true }),
+    matches("READ_ONLY"),
+  );
+  assert.equal(f.calls.length, before);
+});
+
+test("malformed payment status cannot be interpreted as unpaid or allow cancellation", async () => {
+  for (const value of [null, {}, "unexpected", 9]) {
+    const f = await setup({
+      override: async (op) =>
+        op === "orderStatus" ? { data: value } : undefined,
+    });
+    const result = await reserve(f);
+    await assert.rejects(
+      f.portal.bookingPayment(f.session, result.bookingId),
+      matches("UPSTREAM_RESPONSE"),
+    );
+    await assert.rejects(
+      f.portal.cancelReservation(f.session, result.bookingId, {
+        confirm: true,
+      }),
+      matches("UPSTREAM_RESPONSE"),
+    );
+    assert.equal(f.writes().filter((c) => c.op === "cancelBooking").length, 0);
+  }
+});
+
+test("ambiguous payment renewal cannot create more orders on retry", async () => {
+  let timeout = false;
+  const f = await setup({
+    override: async (op) => {
+      if (timeout && op === "createOrder")
+        throw new AppError("Timeout", 502, "UPSTREAM_UNREACHABLE");
+    },
+  });
+  const result = await reserve(f);
+  f.demo.orders.get(result.orderNo).status = 4;
+  timeout = true;
+  await assert.rejects(
+    f.portal.resumePayment(f.session, result.bookingId, { confirm: true }),
+    matches("OUTCOME_UNCERTAIN"),
+  );
+  await assert.rejects(
+    f.portal.resumePayment(f.session, result.bookingId, { confirm: true }),
+    matches("OUTCOME_UNCERTAIN"),
+  );
+  assert.equal(f.writes().filter((c) => c.op === "createOrder").length, 2);
+  assert.equal(f.demo.bookings.length, 1);
+});
+
+test("cancellation and payment cannot race, and estate errors do not remove reservations", async () => {
+  let release;
+  let entered;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const f = await setup({
+    override: async (op) => {
+      if (op === "cancelBooking") {
+        entered();
+        await gate;
+        throw new AppError("Cancellation declined.", 422, "ESTATE_REJECTED");
+      }
+    },
+  });
+  const result = await reserve(f);
+  const cancellation = f.portal.cancelReservation(f.session, result.bookingId, {
+    confirm: true,
+  });
+  const rejected = assert.rejects(cancellation, matches("ESTATE_REJECTED"));
+  await started;
+  assert.throws(
+    () => f.portal.switchUnit(f.session, "demo-unit-2"),
+    matches("BOOKING_IN_PROGRESS"),
+  );
+  await assert.rejects(
+    f.portal.resumePayment(f.session, result.bookingId, { confirm: true }),
+    matches("BOOKING_IN_PROGRESS"),
+  );
+  await assert.rejects(
+    f.portal.cancelReservation(f.session, result.bookingId, { confirm: true }),
+    matches("BOOKING_IN_PROGRESS"),
+  );
+  release();
+  await rejected;
+  assert.equal(f.demo.bookings.length, 1);
+  assert.equal(f.writes().filter((c) => c.op === "cancelBooking").length, 1);
+});
+
 test("slot inspection exposes capacity and schedule metadata without forwarding resident identity", () => {
   const slot = normalizeSlot(
     {

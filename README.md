@@ -22,6 +22,8 @@ There are no acceptance checkboxes, separate review popup, profile-completion ga
 
 The Book button checks the current time, price, availability and selected unit once, then submits the reservation and payment order. It prevents duplicate submissions. Payment instructions appear after booking; existing bookings are in **My bookings**. If the result is uncertain, check those records before retrying.
 
+In **My bookings → Pending payment → View details**, use **Complete payment** to reopen payment instructions, **Check payment** to get the estate's latest status, or **Cancel reservation** to release an unpaid booking. These actions work after signing in again and reuse the existing reservation. Cancelling asks you to confirm the selected booking; paid reservations cannot be cancelled here. Bank transfers and PayNow UEN payments still need confirmation from estate management, so sending payment does not immediately change the booking status.
+
 The browser connects directly to the estate's HTTPS API. You do not need another backend or a local server. Booking requires your normal owner login; account maintenance and password resets can be done in the estate app. The booking session stays in memory and is cleared when the page is left or refreshed. Your saved entry QR remains available independently.
 
 ## iPhone

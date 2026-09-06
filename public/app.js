@@ -612,7 +612,7 @@ function renderBookings() {
             .map((b) => {
               const date = b.startTime.slice(0, 10);
               const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
-              return `<article class="booking-row"><div class="booking-row-left"><div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div><div><h3>${esc(b.facilityName)}</h3><p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p><p class="booking-reference">Booking ${esc(b.id)}</p></div></div><div class="booking-row-right"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tabNames[tab]}</span><br><button class="text-button" data-action="booking-details" data-value="${esc(b.id)}">View details</button></div></article>`;
+              return `<article class="booking-row"><div class="booking-row-left"><div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div><div><h3>${esc(b.facilityName)}</h3><p class="booking-day">${valid ? `<time datetime="${esc(date)}">${esc(dateFormat(date, { weekday: "long", month: "long", year: "numeric" }))}</time>` : "Date unavailable"}</p><p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p><p class="booking-reference">Booking ${esc(b.id)}</p></div></div><div class="booking-row-right"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tabNames[tab]}</span><br><button class="text-button" data-action="booking-details" data-value="${esc(b.id)}">View details</button></div></article>`;
             })
             .join("")
         : `<section class="empty-state"><div class="empty-icon">${icon("calendarCheck")}</div><h2>${titles[tab]}</h2><p>${descriptions[tab]}</p><a class="button" href="#/facilities">Explore facilities ${icon("arrow")}</a></section>`
@@ -771,7 +771,7 @@ modal.addEventListener("click", (event) => {
 
 function reviewDetails(preview) {
   return `<div class="review-facility">${image(preview.facility.image, preview.facility.name)}<div><h3>${esc(preview.facility.name)}</h3><p>${esc(preview.unit.projectName)} · ${esc(unitLabel(preview.unit))}</p></div></div><dl class="review-details">
-    <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(preview.date, { weekday: "short", year: "numeric" }))}</dd></div>
+    <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(preview.date, { weekday: "long", month: "long", year: "numeric" }))}</dd></div>
     <div class="summary-row"><dt>Time (SGT)</dt><dd>${esc(timeRange(preview.startTime, preview.endTime))}</dd></div>
     <div class="summary-row"><dt>Quantity</dt><dd>${preview.quantity} ${preview.quantity === 1 ? "session" : "sessions"}</dd></div>
     <div class="summary-row"><dt>Payment</dt><dd>${esc(preview.paymentMethod)}</dd></div></dl><div class="review-total"><span>Total amount</span><strong>${esc(money(preview.amount))}</strong></div>`;
@@ -873,16 +873,100 @@ function showResult(result) {
   );
 }
 
-function showBookingDetails(id) {
-  const booking = state.bookings.find((b) => b.id === id);
+function paymentStatusText(status) {
+  return (
+    {
+      paid: "Payment received.",
+      expired:
+        "This payment order has expired. Use Complete payment to continue the reservation.",
+      not_started:
+        "No payment order is set up yet. Use Complete payment to continue.",
+      pending: "Payment is still pending confirmation from the estate.",
+    }[status] || "Payment has not been checked yet."
+  );
+}
+
+function showBookingDetails(id, payment = null) {
+  const booking = payment?.booking || state.bookings.find((b) => b.id === id);
   if (!booking) return;
-  if (booking.receipt) return showResult(booking.receipt);
+  const pending = booking.tab === "unpaid" && payment?.status !== "paid";
+  const orderNo =
+    payment?.orderNo || booking.orderNo || booking.receipt?.orderNo;
+  const instructions =
+    payment?.status === "pending"
+      ? state.config.demo
+        ? '<p class="payment-instructions">This is a demonstration reservation. No payment is needed.</p>'
+        : payment.codeUrl
+          ? `<section class="bank-details"><h3>Complete your PayNow payment</h3><div class="payment-qr">${createPaymentQr(payment.codeUrl)}</div><p>Scan this payment QR with your banking app, then check payment below.</p></section>`
+          : bankInstructions()
+      : "";
   openModal(
     "booking-details",
     booking.facilityName,
-    `<p class="modal-copy">${esc(dateFormat(booking.startTime.slice(0, 10), { year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p>${ownBookingMetadata(booking)}${booking.tab === "unpaid" ? '<p class="review-note">Complete or check payment for this existing reservation in the estate app.</p>' : ""}<div class="modal-actions"><button class="button secondary" data-action="close-modal">Close</button></div>`,
+    `<p class="modal-copy">${esc(dateFormat(booking.startTime.slice(0, 10), { weekday: "long", month: "long", year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p>${ownBookingMetadata({ ...booking, orderNo })}
+    ${booking.tab === "unpaid" || payment ? `<p class="status-line" id="payment-status" role="status">${esc(paymentStatusText(payment?.status))}</p>` : ""}${instructions}
+    <div class="modal-actions reservation-actions">${pending ? `<button class="button" data-action="complete-payment" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>Complete payment</button>` : ""}
+    ${booking.tab === "unpaid" || payment ? `<button class="button secondary" data-action="payment-status" data-booking="${esc(id)}">${icon("refresh")} Check payment</button>` : ""}
+    ${pending ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>Cancel reservation</button>` : ""}
+    <button class="button secondary" data-action="close-modal">Close</button></div>`,
     "YOUR BOOKING",
   );
+}
+
+function confirmCancellation(id) {
+  const booking = state.bookings.find((b) => b.id === id);
+  if (!booking || booking.tab !== "unpaid" || state.config.readOnly) return;
+  openModal(
+    "cancel-booking",
+    "Cancel this reservation?",
+    `<p class="modal-copy">${esc(booking.facilityName)} · ${esc(dateFormat(booking.startTime.slice(0, 10), { weekday: "long", month: "long", year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p><p>Your time slot will be released when the estate confirms cancellation.</p><span class="result-reference">Booking reference: ${esc(id)}</span><div class="form-error" id="reservation-error" role="alert"></div><div class="modal-actions"><button class="button secondary" data-action="booking-details" data-value="${esc(id)}">Keep reservation</button><button class="button" data-action="confirm-cancel-booking" data-value="${esc(id)}">Confirm cancellation</button></div>`,
+    "PENDING RESERVATION",
+  );
+}
+
+async function mutateReservation(id, action) {
+  if (state.committing || state.config.readOnly) return;
+  const generation = state.routeGeneration;
+  state.committing = true;
+  const controls = [...document.querySelectorAll("button, input, select")].map(
+    (element) => ({ element, disabled: element.disabled }),
+  );
+  for (const { element } of controls) element.disabled = true;
+  try {
+    const result = await api(
+      `/api/bookings/${encodeURIComponent(id)}/${action}`,
+      { confirm: true },
+    );
+    state.committing = false;
+    if (!state.session || generation !== state.routeGeneration) return;
+    if (action === "cancel") {
+      closeModal();
+      await route();
+      toast("Reservation cancelled.");
+    } else {
+      showBookingDetails(id, result);
+      if (result.status === "paid") {
+        state.bookings = state.bookings.filter((booking) => booking.id !== id);
+        renderBookings();
+      }
+    }
+  } catch (error) {
+    if (!state.session || generation !== state.routeGeneration) return;
+    const message = ["CONNECTION_INTERRUPTED", "INTERNAL_ERROR"].includes(
+      error.code,
+    )
+      ? "The result could not be confirmed. Refresh My bookings before trying again."
+      : error.message;
+    const target =
+      document.querySelector("#reservation-error") ||
+      document.querySelector("#payment-status");
+    if (target) target.textContent = message;
+    else toast(message, true);
+  } finally {
+    state.committing = false;
+    for (const { element, disabled } of controls)
+      if (element.isConnected) element.disabled = disabled;
+  }
 }
 
 function metadataRows(rows) {
@@ -1097,10 +1181,30 @@ document.addEventListener("click", async (event) => {
       else location.hash = hash;
     } else if (action === "payment-status") {
       button.disabled = true;
+      const generation = state.routeGeneration;
+      const bookingId = button.dataset.booking;
       try {
         const result = await api(
-          "/api/payments/" + encodeURIComponent(button.dataset.value),
+          bookingId
+            ? `/api/bookings/${encodeURIComponent(bookingId)}/payment`
+            : "/api/payments/" + encodeURIComponent(button.dataset.value),
         );
+        if (
+          !button.isConnected ||
+          !modal.open ||
+          generation !== state.routeGeneration
+        )
+          return;
+        if (bookingId) {
+          showBookingDetails(bookingId, result);
+          if (result.status === "paid") {
+            state.bookings = state.bookings.filter(
+              (booking) => booking.id !== bookingId,
+            );
+            renderBookings();
+          }
+          return;
+        }
         const status = document.querySelector("#payment-status");
         if (status)
           status.textContent =
@@ -1114,6 +1218,12 @@ document.addEventListener("click", async (event) => {
       }
     } else if (action === "booking-details")
       showBookingDetails(button.dataset.value);
+    else if (action === "complete-payment")
+      await mutateReservation(button.dataset.value, "payment");
+    else if (action === "cancel-booking")
+      confirmCancellation(button.dataset.value);
+    else if (action === "confirm-cancel-booking")
+      await mutateReservation(button.dataset.value, "cancel");
   } catch (error) {
     toast(error.message, true);
     if (button.isConnected) button.disabled = false;
