@@ -43,13 +43,13 @@ Preview at <http://127.0.0.1:3213/Sesame/?demo=1> for sample data. A checkout ha
 
 ## Deployment settings
 
-Estate-specific values stay outside tracked source. Configure the repository's `SESAME_SITE_CONFIG` Actions secret as a JSON object with `apiOrigin` and `payment`. The origin must be one plain HTTPS origin. Payment fields are `payee`, `uen`, `bankName`, `bankAccount`, `email`, and `qrText` (the original payment QR payload). Never include resident credentials, API tokens or personal entry QR data.
+Estate-specific values stay outside tracked source. Configure the main-only `pages-build` environment's `SESAME_SITE_CONFIG` Actions secret as a JSON object with `apiOrigin` and `payment`. The origin must be one plain HTTPS origin. Payment fields are `payee`, `uen`, `bankName`, `bankAccount`, `email`, and `qrText` (the original payment QR payload). Never include resident credentials, API tokens or personal entry QR data.
 
 For local live development, put the same JSON on a `SESAME_SITE_CONFIG` line in the ignored `.env` file. Build with `node --env-file=.env scripts/build-pages.mjs --live`. The public `lib/deployment.mjs` remains empty; only its generated copy in `dist` receives the approved settings. Pull-request checks use example settings and receive no deployment secret.
 
 These settings are excluded from searchable Git source, but the website necessarily exposes its API address and payment instructions to browsers. They are not runtime secrets. Removing names does not prevent people from viewing or copying public code, and earlier commits, branches or cached pages can retain old content.
 
-Pushes to `main` validate, build and publish the allowlisted `dist` artifact. HTTPS, restricted deployment permissions and secret scanning remain enabled. `npm run audit:publication` checks tracked public files before manual publication.
+Changes enter `main` through a pull request with the required `verify` check. Tests run without secrets or deployment permissions. A separate fresh runner builds the allowlisted `dist` artifact without installing npm dependencies or sharing caches, then a third job deploys it. HTTPS, restricted deployment permissions and secret scanning remain enabled. `npm run audit:publication` checks tracked public files before manual publication.
 
 The automated tests cover the simplified booking flow, price/ownership/duplicate protections, API errors, QR decoding, indefinite saved-pass compatibility and private-data handling. Real login and read-only availability were previously verified; no real bookings, payments, emails or profile changes were made during testing. Physical iPhone rendering and reader acceptance are unverified.
 
