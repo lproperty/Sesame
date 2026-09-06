@@ -218,7 +218,7 @@ async function fixture(t, options = {}) {
     }
   };
   const chooseSlot = async () => {
-    all(".facility-card")[0].click();
+    query('.facility-card[href="#/facility/demo-facility-1"]').click();
     await until(
       () => query("#booking-date") && all(".slot").length,
       "facility slots",
@@ -784,7 +784,7 @@ test("disabled estate slots cannot be selected and rules are sanitized before di
     },
   });
   await f.login();
-  f.all(".facility-card")[0].click();
+  f.query('.facility-card[href="#/facility/demo-facility-1"]').click();
   await f.until(() => f.all(".slot").length === 2, "unavailable slots");
   assert.equal(f.all(".slot:not(:disabled)").length, 0);
   assert.match(

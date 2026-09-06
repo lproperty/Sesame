@@ -479,6 +479,10 @@ function facilityCards() {
   if (!filtered.length)
     return '<div class="slot-empty"><p>No facilities match your search.</p><button class="text-button" data-action="clear-filters">Clear filters</button></div>';
   return filtered
+    .sort(
+      (a, b) =>
+        Number(/\btennis\b/i.test(b.name)) - Number(/\btennis\b/i.test(a.name)),
+    )
     .map(
       (
         f,
