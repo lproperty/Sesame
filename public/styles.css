@@ -1747,6 +1747,13 @@ input[type="checkbox"] {
   color: var(--muted);
   margin-top: 3px;
 }
+.booking-row .booking-day {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--ink);
+  margin-top: 6px;
+}
 .booking-row-right {
   text-align: right;
 }
@@ -1810,6 +1817,10 @@ dialog::backdrop {
 }
 .modal-actions .button {
   flex: 1;
+}
+.reservation-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .modal-scroll {
   max-height: 48vh;
@@ -2437,6 +2448,9 @@ dialog::backdrop {
   }
   .modal-actions .button {
     width: 100%;
+  }
+  .reservation-actions {
+    grid-template-columns: 1fr;
   }
   .field-grid {
     grid-template-columns: 1fr;
