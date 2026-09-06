@@ -4,5 +4,5 @@
     <linearGradient id="white" x2="0" y2="512" gradientUnits="userSpaceOnUse"><stop stop-color="#fff"/><stop offset="1" stop-color="#e2e2ff"/></linearGradient>
   </defs>
   <rect width="512" height="512" rx="112" fill="url(#blue)"/>
-  <path d="M344 160 C322 136 291 124 254 124 C198 124 160 151 160 190 C160 228 192 245 253 257 C313 269 350 286 350 329 C350 370 309 394 255 394 C212 394 178 379 154 352" fill="none" stroke="url(#white)" stroke-width="50" stroke-linecap="round"/>
+  <path d="M104 238 L239 118 Q256 103 273 118 L408 238 Q422 250 412 264 Q406 271 396 271 H380 V383 Q380 405 358 405 H299 V325 Q299 308 282 308 H230 Q213 308 213 325 V405 H154 Q132 405 132 383 V271 H116 Q101 271 97 258 Q93 247 104 238 Z" fill="url(#white)"/>
 </svg>
