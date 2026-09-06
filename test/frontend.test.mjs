@@ -61,9 +61,9 @@ async function fixture(t, options = {}) {
   virtualConsole.on("jsdomError", (error) => consoleErrors.push(error.message));
   const dom = new JSDOM(html, {
     url:
-      options.staticDemo || options.browserLive
+      (options.staticDemo || options.browserLive
         ? "https://lproperty.github.io/Sesame/"
-        : origin,
+        : origin) + (options.initialHash || ""),
     runScripts: "outside-only",
     pretendToBeVisual: true,
     virtualConsole,
@@ -123,6 +123,7 @@ async function fixture(t, options = {}) {
   if (options.browserLive)
     window.sesameRequest = createLiveRequest({
       now,
+      storage: options.browserStorage ?? window.sessionStorage,
       payment: {
         payee: "Example estate",
         uen: "EXAMPLE-UEN",
@@ -181,8 +182,17 @@ async function fixture(t, options = {}) {
     await new Promise((resolve) => app.server.close(resolve));
   });
   await until(
-    () => (options.savedEntry ? query("#entry-qr svg") : query("#login-form")),
-    options.savedEntry ? "saved entry QR" : "login form",
+    () =>
+      options.restoredSession
+        ? query(".booking-tabs")
+        : options.savedEntry
+          ? query("#entry-qr svg")
+          : query("#login-form"),
+    options.restoredSession
+      ? "restored bookings screen"
+      : options.savedEntry
+        ? "saved entry QR"
+        : "login form",
   );
   const submit = (form) =>
     form.dispatchEvent(
@@ -581,6 +591,45 @@ test("live Pages UI signs in and completes the real booking flow against a mocke
   assert.equal(f.window.sessionStorage.length, 0);
   assert.deepEqual(f.networkAttempts, []);
   assert.deepEqual(f.consoleErrors, []);
+});
+
+test("refresh restores the signed-in booking screen and sign-out prevents restoration", async (t) => {
+  const first = await fixture(t, { browserLive: true });
+  await first.login();
+  first.window.location.hash = "#/bookings/unpaid";
+  await first.until(
+    () => first.query(".booking-tabs"),
+    "pending bookings screen",
+  );
+  const storage = first.window.sessionStorage;
+  first.window.dispatchEvent(new first.window.Event("pagehide"));
+  const refreshed = await fixture(t, {
+    browserLive: true,
+    browserStorage: storage,
+    initialHash: "#/bookings/unpaid",
+    restoredSession: true,
+  });
+  assert.equal(refreshed.query("#login-form"), null);
+  assert.equal(refreshed.calls.includes("login"), false);
+  assert.equal(refreshed.window.location.hash, "#/bookings/unpaid");
+  assert.match(
+    refreshed.query('.booking-tab[aria-current="page"]').textContent,
+    /Pending payment/,
+  );
+  refreshed.query('.mobile-nav [data-action="logout"]').click();
+  await refreshed.until(
+    () => refreshed.query("#login-form"),
+    "explicit sign-out",
+  );
+  assert.equal(storage.length, 0);
+  const signedOut = await fixture(t, {
+    browserLive: true,
+    browserStorage: storage,
+    initialHash: "#/bookings/unpaid",
+  });
+  assert.ok(signedOut.query("#login-form"));
+  assert.deepEqual(signedOut.calls, []);
+  assert.deepEqual(refreshed.consoleErrors, []);
 });
 
 test("entry QR is the first signed-in screen and a saved pass opens without an estate login", async (t) => {

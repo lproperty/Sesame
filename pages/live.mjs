@@ -1,17 +1,29 @@
 import { OwnerPortal } from "../lib/portal.mjs";
-import { createUpstream, AppError } from "../lib/upstream.mjs";
+import { createUpstream, AppError, API_BASE } from "../lib/upstream.mjs";
+import { identifier, normalizeUnit, requiredString } from "../lib/model.mjs";
 
 const SESSION_TTL = 12 * 60 * 60_000;
 const SESSION_IDLE = 2 * 60 * 60_000;
+export const SESSION_STORAGE_KEY = "sesame-owner-session-v1";
+
+function browserSessionStorage() {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
 
 // This facade stays inside the page. Only createUpstream contacts the estate's
 // fixed HTTPS API; /api/... below is an internal route, never a GitHub request.
-// No password/token is saved to cookies, storage, URLs, HTML or logs.
+// Tab-scoped sessionStorage keeps sign-in across reloads. Passwords are never
+// stored, and the bearer token is never included in UI responses or logs.
 export function createLiveRequest({
   fetchImpl = fetch,
   now = Date.now,
   readOnly = false,
   payment,
+  storage = browserSessionStorage(),
 } = {}) {
   const portal = new OwnerPortal({
     upstream: createUpstream({ fetchImpl, readOnly }),
@@ -32,10 +44,94 @@ export function createLiveRequest({
     ...portal.sessionView(session),
     browserClient: true,
   });
-  const forget = () => {
+  const clearSavedSession = () => {
+    try {
+      storage?.removeItem(SESSION_STORAGE_KEY);
+    } catch {
+      // Browsers can deny storage; in-memory sign-in must still work.
+    }
+  };
+  const saveSession = () => {
+    if (!session) return;
+    try {
+      storage?.setItem(
+        SESSION_STORAGE_KEY,
+        JSON.stringify({
+          version: 1,
+          apiBase: API_BASE,
+          token: session.token,
+          user: { id: session.user.id, name: session.user.name },
+          units: session.units.map(normalizeUnit),
+          unitId: session.unit?.unitId ?? null,
+          projectId: session.unit?.projectId ?? null,
+          expiresAt: session.expiresAt,
+          lastSeen: session.lastSeen,
+        }),
+      );
+    } catch {
+      clearSavedSession();
+    }
+  };
+  const restoreSession = () => {
+    try {
+      const saved = storage?.getItem(SESSION_STORAGE_KEY);
+      if (!saved) return;
+      if (saved.length > 64_000) throw new Error("Invalid saved session.");
+      const record = JSON.parse(saved);
+      const time = now();
+      if (
+        record?.version !== 1 ||
+        record.apiBase !== API_BASE ||
+        !Number.isFinite(record.expiresAt) ||
+        !Number.isFinite(record.lastSeen) ||
+        record.expiresAt <= time ||
+        record.expiresAt > time + SESSION_TTL ||
+        record.lastSeen > time ||
+        record.lastSeen + SESSION_IDLE <= time ||
+        !Array.isArray(record.units) ||
+        record.units.length > 100 ||
+        record.units.some((unit) => unit?.userType !== 0)
+      )
+        throw new Error("Invalid or expired saved session.");
+      const units = record.units.map(normalizeUnit);
+      const unit =
+        record.unitId === null && record.projectId === null
+          ? null
+          : units.find(
+              (candidate) =>
+                candidate.unitId === record.unitId &&
+                candidate.projectId === record.projectId,
+            );
+      if (unit === undefined || (!unit && units.length))
+        throw new Error("Invalid saved unit.");
+      session = {
+        token: requiredString(record.token, "session token", 16_000),
+        user: {
+          id: identifier(record.user?.id, "owner"),
+          name: requiredString(record.user?.name, "owner name"),
+        },
+        units,
+        unit,
+        csrf: crypto.randomUUID(),
+        expiresAt: record.expiresAt,
+        lastSeen: record.lastSeen,
+        // Re-read booking data after reload; never replay saved submissions.
+        quotes: new Map(),
+        facilities: new Map(),
+      };
+    } catch {
+      session = null;
+      clearSavedSession();
+    }
+  };
+  const dropSession = () => {
     if (session) session.token = "";
     session = null;
     epoch++;
+  };
+  const forget = () => {
+    clearSavedSession();
+    dropSession();
   };
   const requireSession = () => {
     if (!session)
@@ -56,6 +152,7 @@ export function createLiveRequest({
       );
     }
     session.lastSeen = now();
+    saveSession();
     return session;
   };
   const noMutationInProgress = () => {
@@ -143,6 +240,8 @@ export function createLiveRequest({
           lastSeen: now(),
         });
         loginAttempts = [];
+        clearSavedSession();
+        saveSession();
         return sessionView();
       } finally {
         body.cipher = "";
@@ -165,6 +264,7 @@ export function createLiveRequest({
     if (action === "POST /api/unit") {
       noMutationInProgress();
       portal.switchUnit(active, body.unitId);
+      saveSession();
       return sessionView();
     }
     if (action === "GET /api/facilities") return portal.facilities(active);
@@ -264,5 +364,10 @@ export function createLiveRequest({
     }
   };
   request.dispose = forget;
+  request.suspend = () => {
+    saveSession();
+    dropSession();
+  };
+  restoreSession();
   return request;
 }

@@ -12,9 +12,11 @@ if (window.top !== window.self) {
     ? (await import("./runtime.mjs")).createDemoRequest()
     : (await import("./live.mjs")).createLiveRequest();
   globalThis.sesameRequest = request;
-  // Drop authentication on navigation, including Safari's back/forward cache.
+  // Clear the old page's private state, while preserving tab-scoped sign-in
+  // for refreshes and Safari's back/forward-cache reload below.
   window.addEventListener("pagehide", () => {
-    request.dispose?.();
+    if (request.suspend) request.suspend();
+    else request.dispose?.();
     document.querySelector("#app").replaceChildren();
     document.querySelector("#modal").close();
     document.querySelector("#modal").replaceChildren();
