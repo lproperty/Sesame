@@ -52,7 +52,7 @@ test("HTTP app provides safe sessions, working assets and private-only routing",
     page.headers.get("content-security-policy"),
     /frame-ancestors 'none'/,
   );
-  assert.match(await page.text(), /Grand Dunman/);
+  assert.match(await page.text(), /Sesame/);
   for (const path of [
     "/app.js",
     "/styles.css",

@@ -10,12 +10,14 @@ import {
 import { dirname, resolve, relative, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
+import { SITE_CONFIG, normalizeSiteConfig } from "../lib/config.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PAGE_FILES = Object.freeze([
   "app.js",
   "entry-pass.js",
   "pass-store.js",
+  "payment-qr.js",
   "vendor/qrcode.mjs",
   "vendor/QR-LICENSE.txt",
   "styles.css",
@@ -30,7 +32,6 @@ export const PAGE_FILES = Object.freeze([
   "assets/games.png",
   "assets/bbq.png",
   "assets/music.png",
-  "assets/bank-transfer.jpg",
   "pages/entry.js",
   "pages/live.mjs",
   "pages/runtime.mjs",
@@ -39,21 +40,24 @@ export const PAGE_FILES = Object.freeze([
   "lib/demo.mjs",
   "lib/portal.mjs",
   "lib/upstream.mjs",
+  "lib/config.mjs",
+  "lib/deployment.mjs",
 ]);
-export const PAGE_POLICY = [
-  "default-src 'none'",
-  "script-src 'self'",
-  "style-src 'self'",
-  "img-src 'self' https://granddunman.intelliving.app",
-  "font-src 'none'",
-  "connect-src https://granddunman.intelliving.app",
-  "worker-src 'none'",
-  "manifest-src 'self'",
-  "object-src 'none'",
-  "base-uri 'none'",
-  "form-action 'none'",
-  "upgrade-insecure-requests",
-].join("; ");
+export const pagePolicy = (config = SITE_CONFIG) =>
+  [
+    "default-src 'none'",
+    "script-src 'self'",
+    "style-src 'self'",
+    `img-src 'self' ${normalizeSiteConfig(config).apiOrigin}`,
+    "font-src 'none'",
+    `connect-src ${normalizeSiteConfig(config).apiOrigin}`,
+    "worker-src 'none'",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "upgrade-insecure-requests",
+  ].join("; ");
 
 // Only a resolved directory within this project may be replaced. Do not follow
 // symlinked ancestors or source files when collecting a public artifact.
@@ -87,9 +91,13 @@ async function inventory(directory, prefix = "") {
   return files.sort();
 }
 
-export async function verifyPages(output = join(root, "dist")) {
+export async function verifyPages(
+  output = join(root, "dist"),
+  config = SITE_CONFIG,
+) {
   output = resolve(output);
   await checkOutput(output);
+  const policy = pagePolicy(config);
   const expected = [
     ...PAGE_FILES,
     "index.html",
@@ -103,7 +111,7 @@ export async function verifyPages(output = join(root, "dist")) {
     );
   const html = await readFile(join(output, "index.html"), "utf8");
   if (
-    !html.includes(`content="${PAGE_POLICY}"`) ||
+    !html.includes(`content="${policy}"`) ||
     !/src="\.\/pages\/entry\.js\?v=[a-f0-9]{16}"/.test(html)
   )
     throw new Error("The Pages entry point or security policy is missing.");
@@ -142,9 +150,14 @@ export async function verifyPages(output = join(root, "dist")) {
   return actual;
 }
 
-export async function buildPages(output = join(root, "dist")) {
+export async function buildPages(
+  output = join(root, "dist"),
+  config = SITE_CONFIG,
+) {
   output = resolve(output);
   await checkOutput(output);
+  config = normalizeSiteConfig(config);
+  const policy = pagePolicy(config);
   await rm(output, { recursive: true, force: true });
   await mkdir(output, { recursive: true });
   for (const file of PAGE_FILES) {
@@ -161,8 +174,12 @@ export async function buildPages(output = join(root, "dist")) {
     await mkdir(dirname(destination), { recursive: true });
     await copyFile(source, destination);
   }
+  await writeFile(
+    join(output, "lib/deployment.mjs"),
+    `export default ${JSON.stringify(config)};\n`,
+  );
   let html = await readFile(join(root, "public/index.html"), "utf8");
-  const digest = createHash("sha256").update(PAGE_POLICY).update(html);
+  const digest = createHash("sha256").update(policy).update(html);
   for (const file of PAGE_FILES)
     digest.update(file).update(await readFile(join(output, file)));
   const version = digest.digest("hex").slice(0, 16);
@@ -181,17 +198,9 @@ export async function buildPages(output = join(root, "dist")) {
   html = html
     .replace(
       '<meta charset="utf-8" />',
-      `<meta charset="utf-8" />\n    <meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}" />\n    <meta name="sesame-build" content="${version}" />`,
+      `<meta charset="utf-8" />\n    <meta http-equiv="Content-Security-Policy" content="${policy}" />\n    <meta name="sesame-build" content="${version}" />`,
     )
     .replace('src="./app.js"', 'src="./pages/entry.js"')
-    .replace(
-      "Your Grand Dunman owner portal. Explore facilities, choose a time and manage your bookings.",
-      "Sesame: sign in with your Grand Dunman owner account, check availability and book estate facilities.",
-    )
-    .replace(
-      "Grand Dunman · Resident portal",
-      "Sesame · Grand Dunman resident portal",
-    )
     .replace(
       /((?:src|href)=")(\.\/[^"?]+)(")/g,
       (_, before, path, after) => `${before}${path}?v=${version}${after}`,
@@ -201,16 +210,25 @@ export async function buildPages(output = join(root, "dist")) {
   await writeFile(
     join(output, "404.html"),
     `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${PAGE_POLICY}"><meta name="referrer" content="no-referrer"><title>Page not found · Sesame</title></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="${policy}"><meta name="referrer" content="no-referrer"><title>Page not found · Sesame</title></head>
 <body><main><h1>This page has moved.</h1><p><a href="https://lproperty.github.io/Sesame/">Open Sesame</a></p></main></body></html>\n`,
   );
-  return verifyPages(output);
+  return verifyPages(output, config);
 }
 
 if (
   process.argv[1] &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
+  if (
+    process.argv.includes("--live") &&
+    (!process.env.SESAME_SITE_CONFIG ||
+      SITE_CONFIG.apiOrigin.endsWith(".invalid") ||
+      !SITE_CONFIG.payment)
+  )
+    throw new Error(
+      "Live deployment requires the estate API and payment settings in SESAME_SITE_CONFIG.",
+    );
   const files = await buildPages();
   console.log(
     `Built and verified ${files.length} website files in dist. The browser connects directly to the estate API; no credentials are included.`,

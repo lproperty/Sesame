@@ -6,6 +6,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createUpstream, AppError } from "./lib/upstream.mjs";
 import { OwnerPortal } from "./lib/portal.mjs";
 import { createDemoUpstream } from "./lib/demo.mjs";
+import { SITE_CONFIG } from "./lib/config.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const publicRoot = join(root, "public");
@@ -24,8 +25,7 @@ const MIME = {
   ".webmanifest": "application/manifest+json",
 };
 const HEADERS = {
-  "content-security-policy":
-    "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' https://granddunman.intelliving.app; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+  "content-security-policy": `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' ${SITE_CONFIG.apiOrigin}; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   "referrer-policy": "no-referrer",
@@ -90,7 +90,7 @@ export function createApplication({
   });
   const sessions = new Map();
   const loginAttempts = new Map();
-  const cookieName = demo ? "gd_demo_session" : "gd_owner_session";
+  const cookieName = demo ? "sesame_demo_session" : "sesame_owner_session";
   const cookie = (id, clear = false) =>
     `${cookieName}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${clear ? 0 : SESSION_TTL / 1000}${secureCookie ? "; Secure" : ""}`;
   const getSessionId = (req) =>
@@ -357,7 +357,7 @@ if (
     process.exitCode = 1;
   });
   server.listen(port, "127.0.0.1", () => {
-    console.log(`Grand Dunman owner portal: http://127.0.0.1:${port}`);
+    console.log(`Sesame owner portal: http://127.0.0.1:${port}`);
     console.log(
       demo
         ? "Offline demonstration. No estate requests or real bookings."

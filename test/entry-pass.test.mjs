@@ -8,6 +8,7 @@ import {
   entryPassFromSession,
 } from "../public/entry-pass.js";
 import { createPassStore, PASS_DATABASE } from "../public/pass-store.js";
+import { createPaymentQr } from "../public/payment-qr.js";
 
 const unit = {
   unitId: "9876543210987654321",
@@ -36,6 +37,13 @@ function decodeSvg(svg) {
   }
   return jsQR(pixels, size, size, { inversionAttempts: "dontInvert" });
 }
+
+test("payment QR encodes the deployment payload exactly without rendering its text as HTML", () => {
+  const text = "SAMPLE-PAYMENT-ONLY <script>alert(1)</script> & merchant";
+  const svg = createPaymentQr(text);
+  assert.equal(decodeSvg(svg).data, text);
+  assert.equal(svg.includes("<script>"), false);
+});
 
 test("entry QR decodes to the native resident payload without losing 19-digit IDs", () => {
   const expected =

@@ -1,3 +1,4 @@
+import { createPaymentQr } from "./payment-qr.js";
 import {
   entryPassFromSession,
   createEntryQr,
@@ -130,7 +131,7 @@ const paths = {
 const icon = (name, extra = "") =>
   `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 const brand = () =>
-  '<span class="brand-mark" aria-hidden="true">G</span><span class="brand-name">GRAND DUNMAN<span class="brand-sub">RESIDENT PORTAL</span></span>';
+  '<span class="brand-mark" aria-hidden="true">S</span><span class="brand-name">SESAME<span class="brand-sub">RESIDENT PORTAL</span></span>';
 const image = (src, alt, extra = "") =>
   `<img src="${esc(!src || src.startsWith("/assets/") ? assetUrl(src || "/assets/estate.jpg") : src)}" alt="${esc(alt)}" ${extra}>`;
 
@@ -253,24 +254,24 @@ function renderLogin(message = "") {
   stopEntry();
   document.title = state.config.staticDemo
     ? "Explore · Sesame"
-    : "Sign in · Grand Dunman";
+    : "Sign in · Sesame";
   app.innerHTML = `<div class="login-layout">
-    <section class="login-visual" aria-label="Life at Grand Dunman">
-      ${image("/assets/estate.jpg", "The Grand Dunman clubhouse and pool at dusk", 'class="login-photo"')}
+    <section class="login-visual" aria-label="Life at Sesame">
+      ${image("/assets/estate.jpg", "The resident clubhouse and pool at dusk", 'class="login-photo"')}
       <div class="brand">${brand()}</div>
       <div class="login-story"><span class="eyebrow">A little more to come home to</span>
         <h1>Every day,<br>a little <em>extraordinary.</em></h1>
         <p>Make the most of the spaces you call home. Your next gathering, game or quiet moment starts here.</p>
       </div>
-      <div class="login-location">${icon("pin")} Dunman Road, Singapore</div>
+      <div class="login-location">${icon("pin")} Your community</div>
     </section>
     <main class="login-panel" id="main-content">
       <span class="small-top-label pill${state.config.demo || state.config.readOnly ? " amber" : ""}">${state.config.staticDemo ? "Public demonstration" : state.config.demo ? "Offline demonstration" : state.config.readOnly ? "Read-only session" : "Owner access"}</span>
       <div class="login-form">
         <span class="eyebrow muted">YOUR RESIDENT PORTAL</span>
-        <h2>Welcome home.</h2><p class="intro">${state.config.staticDemo ? "A little preview of life at Grand Dunman." : entryRoute() ? "Sign in to show your resident entry QR." : "Sign in to manage your facility bookings."}</p>
-        ${state.config.staticDemo ? '<div class="demo-hint"><strong>Explore with sample data.</strong><br>This community-built demonstration is not an official estate service. For real bookings, use Intelliving.</div>' : state.config.demo ? '<div class="demo-hint">Explore with <strong>demo / demo</strong>. Everything in this session is simulated.</div>' : ""}
-        ${state.config.staticDemo ? "" : `<div class="account-type">${icon("home")}<div><strong>Unit owner</strong><small>Your existing Intelliving account</small></div>${icon("circleCheck", "check-icon")}</div>`}
+        <h2>Welcome home.</h2><p class="intro">${state.config.staticDemo ? "A little preview of life at Sesame." : entryRoute() ? "Sign in to show your resident entry QR." : "Sign in to manage your facility bookings."}</p>
+        ${state.config.staticDemo ? '<div class="demo-hint"><strong>Explore with sample data.</strong><br>This community-built demonstration is not an official estate service. For real bookings, use the estate app.</div>' : state.config.demo ? '<div class="demo-hint">Explore with <strong>demo / demo</strong>. Everything in this session is simulated.</div>' : ""}
+        ${state.config.staticDemo ? "" : `<div class="account-type">${icon("home")}<div><strong>Unit owner</strong><small>Your existing estate account</small></div>${icon("circleCheck", "check-icon")}</div>`}
         <form id="login-form">
           <div id="login-error" class="form-error" role="alert">${esc(message)}</div>
           ${
@@ -282,11 +283,11 @@ function renderLogin(message = "") {
           <button class="button full" type="submit" id="login-submit">${state.config.demo ? "Explore the demo" : "Sign in"} ${icon("arrow")}</button>
         </form>
         ${state.config.staticDemo ? "" : '<div class="login-help"><span class="muted field-note">Signing in as a unit owner</span><button class="text-button" data-action="login-help">Need help signing in?</button></div>'}
-        <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : state.config.browserClient ? "Sign-in goes directly to Intelliving over HTTPS." : "A private connection to your estate account."}</p>
+        <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : state.config.browserClient ? "Sign-in goes directly to your estate over HTTPS." : "A private connection to your estate account."}</p>
         ${state.config.browserClient ? '<p class="field-note">Your session lasts in this tab only. Refreshing requires a new sign-in. Sesame is an independent resident portal.</p>' : ""}
         ${savedPassReady() && !state.config.demo ? '<button class="text-button full" data-action="show-entry">Back to my entry QR</button>' : ""}
       </div>
-      <div class="login-bottom">Grand Dunman &nbsp; · &nbsp; Spaces for the way you live</div>
+      <div class="login-bottom">Sesame &nbsp; · &nbsp; Spaces for the way you live</div>
     </main>
   </div>`;
 }
@@ -320,10 +321,10 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">${authenticated ? "Unit owner" : "Saved on this device"}</p></div><button class="icon-button" data-action="${authenticated ? "logout" : "forget-entry"}" title="${authenticated ? "Sign out" : "Forget saved pass"}" aria-label="${authenticated ? "Sign out" : "Forget saved pass"}">${icon("logout")}</button></div>
     </aside>
     <div class="workspace"><header class="topbar"><div class="topbar-crumb"><span>Resident services</span><span class="crumb-divider">/</span><span class="current">${esc(section)}</span></div>
-      <div class="topbar-actions"><span class="property-tag">Grand Dunman, Singapore</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
+      <div class="topbar-actions"><span class="property-tag">Resident portal</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
       ${state.config.staticDemo ? '<div class="mode-banner"><strong>PUBLIC DEMO</strong><span>Sample data only. No real bookings or payments.</span></div>' : state.config.demo ? '<div class="mode-banner"><strong>DEMO</strong> An offline preview. All bookings here are simulated.</div>' : state.config.readOnly ? '<div class="mode-banner readonly">Read-only mode · Explore facilities and availability. Submissions are disabled.</div>' : ""}
       <main class="page${active === "qr" ? " entry-page" : ""}" id="main-content" tabindex="-1">${content}
-        <footer class="page-footer"><span>GRAND DUNMAN &nbsp; / &nbsp; RESIDENT PORTAL</span><span>${icon("clock")} All facility times are in Singapore time (SGT).</span></footer>
+        <footer class="page-footer"><span>SESAME &nbsp; / &nbsp; RESIDENT PORTAL</span><span>${icon("clock")} All facility times are in Singapore time (SGT).</span></footer>
       </main>
     </div>
     <nav class="mobile-nav" aria-label="Mobile resident navigation">
@@ -483,7 +484,7 @@ function facilityCards() {
         f,
       ) => `<a class="facility-card" href="#/facility/${esc(f.id)}" aria-label="View times for ${esc(f.name)}">
     <div class="facility-image">${image(f.image, f.name, 'loading="lazy"')}<span class="image-label">${esc(f.category)}</span></div>
-    <div class="facility-info"><h3>${esc(f.name)}</h3><p class="facility-excerpt">${esc(excerpt(f.introduction) || "Discover this shared space at Grand Dunman.")}</p>
+    <div class="facility-info"><h3>${esc(f.name)}</h3><p class="facility-excerpt">${esc(excerpt(f.introduction) || "Discover this shared space at Sesame.")}</p>
       <div class="facility-bottom"><span class="facility-price"><small>Listed rate</small><strong>${esc(money(f.indicativePrice))}</strong></span><span class="view-times">View times ${icon("arrow")}</span></div>
     </div></a>`,
     )
@@ -491,7 +492,7 @@ function facilityCards() {
 }
 
 function renderFacilities() {
-  document.title = "Facilities · Grand Dunman";
+  document.title = "Facilities · Sesame";
   const categories = [
     "All facilities",
     ...new Set(state.facilities.map((f) => f.category)),
@@ -552,7 +553,7 @@ function summaryMarkup() {
 
 function renderDetail() {
   const f = state.detail;
-  document.title = `${f.name} · Grand Dunman`;
+  document.title = `${f.name} · Sesame`;
   renderShell(`<a class="back-link" href="#/facilities">${icon("back")} All facilities</a><div class="detail-heading"><p class="eyebrow">${esc(f.category)}</p><h1>${esc(f.name)}</h1></div>
     <div class="booking-layout"><div><section class="panel" aria-labelledby="choose-date-title"><div class="panel-title"><h2 id="choose-date-title"><span class="step-number">1</span>Choose a date</h2><label><span class="visually-hidden">Booking date</span><input class="date-input" id="booking-date" type="date" min="${state.config.today}" max="${state.config.lastDate}" value="${state.date}"></label></div>
       <div class="calendar-nav"><button class="icon-button" data-action="week-prev" aria-label="Previous week" ${state.weekStart <= state.config.today ? "disabled" : ""}>${icon("back")}</button><strong>${esc(dateFormat(state.weekStart, { day: undefined, month: "long", year: "numeric" }))}</strong><button class="icon-button" data-action="week-next" aria-label="Next week" ${addDays(state.weekStart, 7) > state.config.lastDate ? "disabled" : ""}>${icon("arrow")}</button></div>
@@ -582,7 +583,7 @@ const tabNames = {
   history: "History",
 };
 function renderBookings() {
-  document.title = "My bookings · Grand Dunman";
+  document.title = "My bookings · Sesame";
   const tab = state.tab;
   const titles = {
     current: "Your next moment awaits.",
@@ -732,7 +733,7 @@ async function route() {
 }
 
 let returnFocus;
-function openModal(type, heading, body, eyebrow = "GRAND DUNMAN") {
+function openModal(type, heading, body, eyebrow = "SESAME") {
   if (!modal.open) returnFocus = document.activeElement;
   state.modalType = type;
   modal.innerHTML = `<header class="modal-head"><div><p class="eyebrow">${esc(eyebrow)}</p><h2 id="modal-title">${esc(heading)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon("close")}</button></header><div class="modal-body">${body}</div>`;
@@ -824,7 +825,7 @@ async function bookSelected() {
         ...receipt,
         status: "outcome_unknown",
         message:
-          "The booking result could not be confirmed. Check My bookings or Intelliving before trying again.",
+          "The booking result could not be confirmed. Check My bookings or the estate app before trying again.",
       });
     } else {
       if (
@@ -848,7 +849,10 @@ async function bookSelected() {
 }
 
 function bankInstructions() {
-  return `<section class="bank-details"><h3>Pay by bank transfer or PayNow UEN</h3><div class="bank-grid"><dl><dt>Payee</dt><dd>Grand Dunman</dd><dt>UEN</dt><dd>202223759E</dd><dt>UOB account</dt><dd>451-313-387-6</dd></dl>${image("/assets/bank-transfer.jpg", "Grand Dunman PayNow payment QR supplied in the Android app")}</div></section><p class="payment-instructions">Send proof of payment through <strong>E-Forms 13</strong> in the Intelliving app, or email <a href="mailto:admin@granddunman-mgt.com.sg">admin@granddunman-mgt.com.sg</a>. Include your unit and booking reference.</p>`;
+  const payment = state.config.payment;
+  if (!payment)
+    return '<p class="payment-instructions">Complete payment in the estate app.</p>';
+  return `<section class="bank-details"><h3>Pay by bank transfer or PayNow UEN</h3><div class="bank-grid"><dl><dt>Payee</dt><dd>${esc(payment.payee)}</dd><dt>UEN</dt><dd>${esc(payment.uen)}</dd><dt>${esc(payment.bankName)} account</dt><dd>${esc(payment.bankAccount)}</dd></dl><div class="payment-qr">${createPaymentQr(payment.qrText)}</div></div></section><p class="payment-instructions">Send proof of payment through <strong>E-Forms 13</strong> in the estate app, or email <a href="mailto:${esc(payment.email)}">${esc(payment.email)}</a>. Include your unit and booking reference.</p>`;
 }
 
 function showResult(result) {
@@ -876,7 +880,7 @@ function showBookingDetails(id) {
   openModal(
     "booking-details",
     booking.facilityName,
-    `<p class="modal-copy">${esc(dateFormat(booking.startTime.slice(0, 10), { year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p>${ownBookingMetadata(booking)}${booking.tab === "unpaid" ? '<p class="review-note">Complete or check payment for this existing reservation in the Intelliving app.</p>' : ""}<div class="modal-actions"><button class="button secondary" data-action="close-modal">Close</button></div>`,
+    `<p class="modal-copy">${esc(dateFormat(booking.startTime.slice(0, 10), { year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p>${ownBookingMetadata(booking)}${booking.tab === "unpaid" ? '<p class="review-note">Complete or check payment for this existing reservation in the estate app.</p>' : ""}<div class="modal-actions"><button class="button secondary" data-action="close-modal">Close</button></div>`,
     "YOUR BOOKING",
   );
 }
@@ -1011,7 +1015,7 @@ document.addEventListener("click", async (event) => {
       openModal(
         "help",
         "A little help signing in.",
-        '<p class="modal-copy">Use the same email, phone number or username and password as your Intelliving owner account. The portal always signs in as a unit owner.</p><p class="modal-copy">To reset a forgotten password, use <strong>Forgot Password</strong> in the Intelliving app. Contact estate management if your account or unit needs activation.</p><button class="button full" data-action="close-modal">Back to sign in</button>',
+        '<p class="modal-copy">Use the same email, phone number or username and password as your estate owner account. The portal always signs in as a unit owner.</p><p class="modal-copy">To reset a forgotten password, use <strong>Forgot Password</strong> in the estate app. Contact estate management if your account or unit needs activation.</p><button class="button full" data-action="close-modal">Back to sign in</button>',
         "OWNER ACCESS",
       );
     } else if (action === "logout") {
@@ -1103,7 +1107,7 @@ document.addEventListener("click", async (event) => {
             result.status === "paid"
               ? "Payment received."
               : result.status === "expired"
-                ? "This payment order has expired. Please check your reservation in the Intelliving app."
+                ? "This payment order has expired. Please check your reservation in the estate app."
                 : "Payment is still pending confirmation from the estate.";
       } finally {
         button.disabled = false;

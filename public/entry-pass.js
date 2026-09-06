@@ -19,7 +19,7 @@ export function normalizeEntryPass(value) {
       projectId: id(value?.unit?.projectId),
       buildingName: label(value.unit.buildingName),
       unitName: label(value.unit.unitName),
-      projectName: label(value.unit.projectName) || "Grand Dunman",
+      projectName: label(value.unit.projectName) || "Your estate",
     },
   };
 }

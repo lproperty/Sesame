@@ -1926,7 +1926,10 @@ dialog::backdrop {
   align-items: center;
   gap: 16px;
 }
-.bank-grid img {
+.payment-qr svg {
+  display: block;
+  width: 100%;
+  height: auto;
   border: 5px solid white;
 }
 .bank-grid dt {
@@ -2762,7 +2765,7 @@ dialog::backdrop {
   .bank-grid {
     grid-template-columns: 1fr;
   }
-  .bank-grid img {
+  .payment-qr svg {
     width: 124px;
   }
 }

@@ -11,11 +11,13 @@ export function createLiveRequest({
   fetchImpl = fetch,
   now = Date.now,
   readOnly = false,
+  payment,
 } = {}) {
   const portal = new OwnerPortal({
     upstream: createUpstream({ fetchImpl, readOnly }),
     now,
     readOnly,
+    payment,
   });
   let session = null;
   let epoch = 0;

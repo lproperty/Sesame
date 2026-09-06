@@ -1,9 +1,9 @@
 {
-  "name": "grand-dunman-resident-web",
+  "name": "sesame-resident-web",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Mobile-friendly Grand Dunman owner login and facility booking frontend for GitHub Pages.",
+  "description": "Mobile-friendly Sesame owner login and facility booking frontend for GitHub Pages.",
   "engines": {
     "node": ">=22"
   },

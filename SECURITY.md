@@ -2,7 +2,7 @@
 
 ## Live architecture
 
-The GitHub Pages site at <https://lproperty.github.io/Sesame/> hosts static interface code. The browser uses Grand Dunman's existing HTTPS API for real owner authentication, facilities, reservations and orders. No extra backend or local server is required. A simulator is available only with the explicit `?demo=1` option.
+The GitHub Pages site at <https://lproperty.github.io/Sesame/> hosts static interface code. The browser uses the estate's existing HTTPS API for real owner authentication, facilities, reservations and orders. No extra backend or local server is required. A simulator is available only with the explicit `?demo=1` option.
 
 Passwords go directly to the fixed estate API origin. Its token stays inside the browser client's in-memory session and is not included in the UI's session view. Neither passwords nor API tokens are saved to cookies, localStorage, sessionStorage, IndexedDB, URLs, logs, repository files or build artifacts. Signing out or leaving the page discards the token. The interface and session are cleared before Safari can restore a previous page from its back/forward cache. Refreshing requires signing in again for booking. The separate, opt-in saved entry pass is described below. Browser/password-manager features that a resident chooses to use are separate from app storage.
 
@@ -22,7 +22,7 @@ QRs refresh every ten seconds, are removed while the page is hidden and are rege
 
 ## Browser protections and boundaries
 
-- The HTML CSP allows API connections only to `https://granddunman.intelliving.app`. Scripts and styles are same-origin, and images are restricted to the site and estate origin. Inline scripts/styles, form navigations, workers, object embeds and base URL changes are blocked.
+- The HTML CSP allows API connections only to the deployment's configured HTTPS estate origin. The build validates this as one exact origin, without credentials, paths or extra CSP directives. Scripts and styles are same-origin, and images are restricted to the site and estate origin. Inline scripts/styles, form navigations, workers, object embeds and base URL changes are blocked.
 - The bootstrap refuses to show sign-in or booking controls inside a frame or an insecure context. GitHub Pages cannot configure custom `frame-ancestors`, `X-Frame-Options`, COOP or Permissions-Policy response headers; the JavaScript guard is not claimed to provide those headers.
 - Sessions expire after two hours of inactivity or twelve hours total. State is per tab, and failed or stale requests cannot replace a newer session.
 - No service worker, third-party analytics or third-party fonts are installed. GitHub may keep normal hosting access logs, including IP addresses; see its [Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
@@ -39,11 +39,15 @@ GitHub's [Pages usage guidance](https://docs.github.com/en/pages/getting-started
 
 ## Publication and deployment
 
-The build copies and verifies an explicit file allowlist. The Node server, credentials files, environment files, diagnostics, reports, APK research and dependency directories are excluded from the website artifact. The live API adapter and the APK-sourced payment QR are included because the hosted client uses them. No private account data is compiled into either.
+The build copies and verifies an explicit file allowlist. The Node server, credentials files, environment files, diagnostics, reports, APK research and dependency directories are excluded from the website artifact. The live API adapter and deployment payment settings are included because the hosted client uses them. No private account data is compiled into either.
+
+Estate identifiers are omitted from tracked source. The maintainer supplies only the API origin and payment settings through `SESAME_SITE_CONFIG`, stored as an Actions secret and passed only to the main-branch live build. The builder copies an explicit set of configuration fields into generated `lib/deployment.mjs` and fingerprints them with the other assets. Public forks and pull-request checks use a reserved example origin. Deployment refuses to publish a live build without real settings. Query strings, form fields and API responses cannot change the configured API origin.
+
+The deployed API address and payment instructions are public browser configuration, even though the input is stored as an Actions secret to keep it out of Git source. Do not put passwords, tokens or personal entry QR data in that input. Source neutralization is a discoverability measure, not access control; old commits, branches, caches and copies can retain former content.
 
 Module and asset URLs include a build fingerprint so new releases do not mix with cached modules. Every module dependency is checked against the allowlist and expected version format. The publication audit checks tracked paths, common credential patterns and, for the approved local publication check, exact local credential values without logging them. Scanners are an additional safeguard, not proof that every conceivable secret has been detected.
 
-GitHub Actions are pinned to full commit hashes. The workflow installs locked test dependencies without lifecycle scripts, audits the source, tests it, builds and verifies the artifact, and uploads only `dist`. Pull requests have no deployment permissions. Only `main` in `lproperty/Sesame` may deploy, and the `github-pages` environment permits only that branch. Build access is read-only; only the deployment job receives `pages: write` and `id-token: write`. Checkout does not save Git credentials, and no personal access token or repository secret is embedded in the site.
+GitHub Actions are pinned to full commit hashes. The workflow installs locked test dependencies without lifecycle scripts, audits the source, tests it, builds and verifies the artifact, and uploads only `dist`. Pull requests have no deployment permissions or deployment configuration. Only `main` in `lproperty/Sesame` may deploy, and the `github-pages` environment permits only that branch. Build access is read-only; only the deployment job receives `pages: write` and `id-token: write`. Checkout does not save Git credentials. No personal access token, resident password or estate API token is embedded in the site.
 
 HTTPS is enforced by GitHub for the default `github.io` domain. Secret scanning, push protection, dependency security updates and private vulnerability reporting are enabled. Dependabot proposes updates to test dependencies and workflow actions.
 

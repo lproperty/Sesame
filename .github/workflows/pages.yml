@@ -35,8 +35,14 @@ jobs:
         run: npm run audit:publication
       - name: Run syntax, application and security tests
         run: npm run check
-      - name: Build and verify the live frontend artifact
+      - name: Build and verify the example artifact
+        if: github.event_name == 'pull_request'
         run: npm run build:pages
+      - name: Build and verify the live frontend artifact
+        if: github.repository == 'lproperty/Sesame' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        env:
+          SESAME_SITE_CONFIG: ${{ secrets.SESAME_SITE_CONFIG }}
+        run: npm run build:pages -- --live
       - name: Upload only the verified website
         if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3

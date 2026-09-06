@@ -19,6 +19,7 @@ import {
 } from "../public/entry-pass.js";
 import { createPassStore } from "../public/pass-store.js";
 import { IDBFactory } from "fake-indexeddb";
+import { createPaymentQr } from "../public/payment-qr.js";
 
 const html = await readFile(
   new URL("../public/index.html", import.meta.url),
@@ -31,7 +32,7 @@ const sourceModule = await readFile(
 // jsdom evaluates the DOM controller outside its module loader. Bind the real
 // imported helpers below; the production module graph is verified separately.
 const source = sourceModule.replace(
-  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store)\.js["'];\s*/gm,
+  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store|payment-qr)\.js["'];\s*/gm,
   "",
 );
 
@@ -71,6 +72,7 @@ async function fixture(t, options = {}) {
   window.Date.now = now;
   window.entryPassFromSession = entryPassFromSession;
   window.createEntryQr = createEntryQr;
+  window.createPaymentQr = createPaymentQr;
   window.ENTRY_REFRESH_MS = ENTRY_REFRESH_MS;
   const passDatabase = options.passDatabase || new IDBFactory();
   window.createPassStore = () =>
@@ -121,6 +123,14 @@ async function fixture(t, options = {}) {
   if (options.browserLive)
     window.sesameRequest = createLiveRequest({
       now,
+      payment: {
+        payee: "Example estate",
+        uen: "EXAMPLE-UEN",
+        bankName: "Example bank",
+        bankAccount: "EXAMPLE-ACCOUNT",
+        email: "payments@example.invalid",
+        qrText: "SAMPLE PAYMENT ONLY",
+      },
       readOnly: options.readOnly || false,
       fetchImpl: async (url, init) => {
         estateRequests.push({ url, init });
@@ -273,7 +283,7 @@ test("frontend signs in, filters, previews, submits once to the simulator, and s
   assert.equal(f.writes().filter((op) => op === "insertBooking").length, 1);
   assert.equal(f.writes().filter((op) => op === "createOrder").length, 1);
   assert.equal(
-    f.query('img[src="/assets/bank-transfer.jpg"]'),
+    f.query(".payment-qr"),
     null,
     "Demo must not show a real payment QR.",
   );
@@ -349,7 +359,7 @@ test("Pages booking flow creates only a simulated reservation and never displays
     "simulated result",
   );
   assert.match(f.query("#modal").textContent, /No payment is needed/);
-  assert.equal(f.query('img[src$="bank-transfer.jpg"]'), null);
+  assert.equal(f.query(".payment-qr"), null);
   assert.equal(f.query(".bank-details"), null);
   f.query('[data-action="go-bookings"]').click();
   await f.until(
@@ -377,7 +387,7 @@ test("live Pages UI signs in and completes the real booking flow against a mocke
   assert.equal(f.query("#password").value, "");
   assert.match(
     f.query(".login-footnote").textContent,
-    /directly to Intelliving over HTTPS/,
+    /directly to your estate over HTTPS/,
   );
   await f.login();
   assert.equal(f.query(".mode-banner"), null);
@@ -395,9 +405,11 @@ test("live Pages UI signs in and completes the real booking flow against a mocke
   await f.until(() => f.query(".bank-details"), "live payment instructions");
   assert.equal(f.writes().filter((op) => op === "insertBooking").length, 1);
   assert.equal(f.writes().filter((op) => op === "createOrder").length, 1);
+  assert.ok(f.query(".payment-qr svg"));
+  assert.match(f.query(".bank-grid").textContent, /Example estate/);
   assert.equal(
-    f.query(".bank-grid img").getAttribute("src"),
-    "/Sesame/assets/bank-transfer.jpg",
+    f.query(".payment-instructions a").getAttribute("href"),
+    "mailto:payments@example.invalid",
   );
   f.query('[data-action="go-bookings"]').click();
   await f.until(

@@ -28,7 +28,7 @@ test("public artifact is allowlisted, has an effective static CSP, and resolves 
   ).content;
   for (const directive of [
     "default-src 'none'",
-    "connect-src https://granddunman.intelliving.app",
+    `connect-src ${new URL(API_BASE).origin}`,
     "form-action 'none'",
     "base-uri 'none'",
     "worker-src 'none'",

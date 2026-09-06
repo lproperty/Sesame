@@ -1,7 +1,7 @@
 {
-  "name": "Sesame · Grand Dunman",
+  "name": "Sesame",
   "short_name": "Sesame",
-  "description": "Grand Dunman resident portal",
+  "description": "Sesame resident portal",
   "start_url": "./#/qr",
   "scope": "./",
   "display": "standalone",

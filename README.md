@@ -1,4 +1,4 @@
-# Sesame · Grand Dunman
+# Sesame
 
 Entry QR and facility bookings, with as few steps as possible.
 
@@ -22,7 +22,7 @@ There are no acceptance checkboxes, separate review popup, profile-completion ga
 
 The Book button checks the current time, price, availability and selected unit once, then submits the reservation and payment order. It prevents duplicate submissions. Payment instructions appear after booking; existing bookings are in **My bookings**. If the result is uncertain, check those records before retrying.
 
-The browser connects directly to the estate's HTTPS API. You do not need another backend or a local server. Booking requires your normal owner login; account maintenance and password resets can be done in Intelliving. The booking session stays in memory and is cleared when the page is left or refreshed. Your saved entry QR remains available independently.
+The browser connects directly to the estate's HTTPS API. You do not need another backend or a local server. Booking requires your normal owner login; account maintenance and password resets can be done in the estate app. The booking session stays in memory and is cleared when the page is left or refreshed. Your saved entry QR remains available independently.
 
 ## iPhone
 
@@ -39,10 +39,18 @@ npm run build:pages
 npm run preview:pages
 ```
 
-Preview at <http://127.0.0.1:3213/Sesame/>. Add `?demo=1` for sample data. The optional loopback server still runs with `npm start`; `npm run start:readonly` blocks estate mutations and `npm run demo` uses `demo / demo` on port 3211.
+Preview at <http://127.0.0.1:3213/Sesame/?demo=1> for sample data. A checkout has a nonfunctional example API origin until deployment settings are provided. The optional loopback server still runs with `npm start`; `npm run start:readonly` blocks estate mutations and `npm run demo` uses `demo / demo` on port 3211.
+
+## Deployment settings
+
+Estate-specific values stay outside tracked source. Configure the repository's `SESAME_SITE_CONFIG` Actions secret as a JSON object with `apiOrigin` and `payment`. The origin must be one plain HTTPS origin. Payment fields are `payee`, `uen`, `bankName`, `bankAccount`, `email`, and `qrText` (the original payment QR payload). Never include resident credentials, API tokens or personal entry QR data.
+
+For local live development, put the same JSON on a `SESAME_SITE_CONFIG` line in the ignored `.env` file. Build with `node --env-file=.env scripts/build-pages.mjs --live`. The public `lib/deployment.mjs` remains empty; only its generated copy in `dist` receives the approved settings. Pull-request checks use example settings and receive no deployment secret.
+
+These settings are excluded from searchable Git source, but the website necessarily exposes its API address and payment instructions to browsers. They are not runtime secrets. Removing names does not prevent people from viewing or copying public code, and earlier commits, branches or cached pages can retain old content.
 
 Pushes to `main` validate, build and publish the allowlisted `dist` artifact. HTTPS, restricted deployment permissions and secret scanning remain enabled. `npm run audit:publication` checks tracked public files before manual publication.
 
-The 60 automated tests cover the simplified booking flow, price/ownership/duplicate protections, API errors, QR decoding, indefinite saved-pass compatibility and private-data handling. Real login and read-only availability were previously verified; no real bookings, payments, emails or profile changes were made during testing. Physical iPhone rendering and reader acceptance are unverified.
+The automated tests cover the simplified booking flow, price/ownership/duplicate protections, API errors, QR decoding, indefinite saved-pass compatibility and private-data handling. Real login and read-only availability were previously verified; no real bookings, payments, emails or profile changes were made during testing. Physical iPhone rendering and reader acceptance are unverified.
 
 See [SECURITY.md](SECURITY.md) for security boundaries and [ASSETS.md](ASSETS.md) for image and QR-encoder provenance. The public source contains no personal credentials or entry QR.
