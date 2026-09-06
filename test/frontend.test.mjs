@@ -255,8 +255,8 @@ for (const browserLive of [false, true]) {
       facilityDetailId: "demo-facility-1-2026-09-06-0",
       unitId: "demo-unit-1",
       facilityName: "Jewel Function Room 1",
-      startTime: "2026-09-06 09:00:00",
-      endTime: "2026-09-06 15:00:00",
+      startTime: "2026.09.06 09:00",
+      endTime: "2026.09.06 15:00",
       bookingNum: 1,
       pricing: 116.35,
       paidTotal: 116.35,
@@ -276,7 +276,17 @@ for (const browserLive of [false, true]) {
       () => f.query('[data-action="booking-details"]'),
       "existing reservation",
     );
+    assert.equal(
+      f.query(".booking-day time").getAttribute("datetime"),
+      "2026-09-06",
+    );
+    assert.match(
+      f.query(".booking-day").textContent,
+      /Sunday, 6 September 2026/,
+    );
     f.query('[data-action="booking-details"]').click();
+    assert.match(f.query("#modal").textContent, /Sunday, 6 September 2026/);
+    assert.match(f.query("#modal").textContent, /09:00 – 15:00/);
     assert.ok(f.query('[data-action="complete-payment"]'));
     assert.ok(f.query('[data-action="cancel-booking"]'));
     f.query('[data-action="complete-payment"]').click();
