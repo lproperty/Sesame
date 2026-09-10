@@ -1701,8 +1701,8 @@ input[type="checkbox"] {
   max-width: 360px;
 }
 .booking-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 260px;
   align-items: center;
   gap: 18px;
   padding: 21px 23px;
@@ -1713,8 +1713,13 @@ input[type="checkbox"] {
 }
 .booking-row-left {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 18px;
+  min-width: 0;
+}
+.booking-info {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .booking-date {
   border: 1px solid var(--line);
@@ -1755,13 +1760,45 @@ input[type="checkbox"] {
   margin-top: 6px;
 }
 .booking-row-right {
-  text-align: right;
+  display: grid;
+  gap: 14px;
+  width: 100%;
+  min-width: 0;
+}
+.booking-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 .booking-row-right strong {
   display: block;
-  margin-bottom: 5px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.booking-actions {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+.booking-actions .button {
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  gap: 8px;
+  padding: 12px 10px;
   font-size: 13px;
-  font-weight: 500;
+  line-height: 1.25;
+  text-align: center;
+  white-space: normal;
+}
+.booking-actions .icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
 }
 .booking-reference {
   overflow-wrap: anywhere;
@@ -2429,7 +2466,7 @@ dialog::backdrop {
     gap: 13px;
   }
   .booking-row-right {
-    margin-left: auto;
+    margin-left: 0;
   }
   .booking-row h3 {
     font-size: 18px;
@@ -2794,9 +2831,6 @@ dialog::backdrop {
 }
 
 /* Booking activity and estate-issued facility entry images. */
-.booking-qr-button {
-  margin-right: 12px;
-}
 .booking-qr-images {
   display: flex;
   flex-wrap: wrap;
@@ -2961,8 +2995,25 @@ dialog::backdrop {
   grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 @media (max-width: 1000px) {
+  .booking-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  .booking-row-right {
+    border-top: 1px solid var(--line);
+    padding-top: 16px;
+  }
+  .booking-status-row .pill {
+    font-size: 11px;
+  }
   .activity-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 360px) {
+  .booking-actions {
+    grid-auto-flow: row;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 600px) {

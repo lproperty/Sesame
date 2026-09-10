@@ -779,7 +779,23 @@ function renderBookings() {
             .map((b) => {
               const date = b.startTime.slice(0, 10);
               const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
-              return `<article class="booking-row"><div class="booking-row-left"><div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div><div><h3>${esc(b.facilityName)}</h3><p class="booking-day">${valid ? `<time datetime="${esc(date)}">${esc(dateFormat(date, { weekday: "long", month: "long", year: "numeric" }))}</time>` : "Date unavailable"}</p><p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p><p class="booking-reference">Booking ${esc(b.id)}</p></div></div><div class="booking-row-right"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tab === "current" && freeBooking(b) ? "Confirmed · Free" : tabNames[tab]}</span><br>${tab === "current" ? `<button class="text-button booking-qr-button" data-action="booking-qr" data-value="${esc(b.id)}">${icon("qr")} Entry QR</button>` : ""}<button class="text-button" data-action="booking-details" data-value="${esc(b.id)}">View details</button></div></article>`;
+              return `<article class="booking-row">
+                <div class="booking-row-left">
+                  <div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div>
+                  <div class="booking-info"><h3>${esc(b.facilityName)}</h3>
+                    <p class="booking-day">${valid ? `<time datetime="${esc(date)}">${esc(dateFormat(date, { weekday: "long", month: "long", year: "numeric" }))}</time>` : "Date unavailable"}</p>
+                    <p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p>
+                    <p class="booking-reference">Booking ${esc(b.id)}</p>
+                  </div>
+                </div>
+                <div class="booking-row-right">
+                  <div class="booking-status-row"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tab === "current" && freeBooking(b) ? "Confirmed · Free" : tabNames[tab]}</span></div>
+                  <div class="booking-actions" role="group" aria-label="Booking actions">
+                    ${tab === "current" ? `<button class="button booking-qr-button" data-action="booking-qr" data-value="${esc(b.id)}">${icon("qr")}<span>Entry QR</span></button>` : ""}
+                    <button class="button secondary" data-action="booking-details" data-value="${esc(b.id)}"><span>View details</span></button>
+                  </div>
+                </div>
+              </article>`;
             })
             .join("")
         : `<section class="empty-state"><div class="empty-icon">${icon("calendarCheck")}</div><h2>${titles[tab]}</h2><p>${descriptions[tab]}</p><a class="button" href="#/facilities">Explore facilities ${icon("arrow")}</a></section>`
