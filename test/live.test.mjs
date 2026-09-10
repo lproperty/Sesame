@@ -96,12 +96,11 @@ test("live browser client authenticates only against the estate and never return
   assert.equal((await f.request("/api/session")).status, 401);
 });
 
-test("browser sessions expire and disposal prevents a later request from reusing the token", async () => {
+test("browser sessions survive inactivity and disposal prevents later token reuse", async () => {
   const f = fixture();
   await f.login();
-  f.advance(2 * 60 * 60_000 + 1);
-  assert.equal((await f.request("/api/session")).status, 401);
-  await f.login();
+  f.advance(30 * 24 * 60 * 60_000);
+  assert.equal((await f.request("/api/session")).status, 200);
   const before = f.requests.length;
   f.client.dispose();
   assert.equal((await f.request("/api/facilities")).status, 401);

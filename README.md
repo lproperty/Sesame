@@ -20,11 +20,33 @@ The pass is encrypted in this browser. It saves the minimum entry identity, not 
 
 There are no acceptance checkboxes, separate review popup, profile-completion gate, or email/password verification screens. Facility information and rules are optional reading below the booking controls. Nothing is marked accepted or verified on your behalf. If the estate API rejects a request, its error is displayed.
 
-The Book button checks the current time, price, availability and selected unit once, then submits the reservation and payment order. It prevents duplicate submissions. Payment instructions appear after booking; existing bookings are in **My bookings**. If the result is uncertain, check those records before retrying.
+The Book button checks the current time, price, availability and selected unit once, then submits the reservation and payment order. It prevents duplicate submissions. Paid bookings show payment instructions; zero-value bookings show that no payment is required, and **Confirmed · Free** once the estate returns a current booking. Existing bookings are in **My bookings**. If the result is uncertain, check those records before retrying.
 
 In **My bookings → Pending payment → View details**, use **Complete payment** to reopen payment instructions, **Check payment** to get the estate's latest status, or **Cancel reservation** to release an unpaid booking. These actions work after signing in again and reuse the existing reservation. Cancelling asks you to confirm the selected booking; paid reservations cannot be cancelled here. Bank transfers and PayNow UEN payments still need confirmation from estate management, so sending payment does not immediately change the booking status.
 
-The browser connects directly to the estate's HTTPS API. You do not need another backend or a local server. Booking requires your normal owner login; account maintenance and password resets can be done in the estate app. Sign-in and the selected unit survive refreshes in the same tab. The browser keeps the session in tab-scoped storage, never your password. Sign out clears it; the session also expires after two hours of inactivity, twelve hours from sign-in, or when the estate revokes it. Your saved entry QR remains available independently.
+Confirmed **free tennis** bookings also offer **Cancel reservation** before the session starts. Sesame checks the current booking and its linked zero-value order again, then asks the estate to cancel it. It confirms success only after the booking disappears from the active lists. The estate can still reject a request; a timeout or unverifiable result is shown as uncertain. A settled zero-value order may remain in order history after the slot is released. This does not establish whether monthly quota is restored.
+
+## Booking entry QR
+
+In **My bookings → Upcoming**, tap **Entry QR**, or open a booking's details and choose **Show entry QR**. These are the estate's images for that confirmed booking and selected unit. Sesame fetches them from the native booking QR endpoint and refreshes at the estate's configured interval (ten seconds by default). Codes are removed when the dialog closes, the page is hidden, the account/unit changes, or the booking is cancelled. Returning to the open dialog requests a fresh code.
+
+Booking entry QR images are held only in the active page. They are never added to the saved resident pass, activity log, export, or browser storage. A connection and a valid booking session are required. Pending, ended and missing bookings do not receive a QR through Sesame. The estate and its readers determine when the credential can open the facility; physical reader acceptance has not been tested here.
+
+## Activity log
+
+Open **Activity** for this account and unit's booking observations and actions. The log records booking/cancellation attempts as **unconfirmed** before submission, then records success or failure when the result is known. It preserves the original attempt time and separates device observation times from estate-provided order times. Disappearance from a list alone never creates a cancellation event.
+
+The log is encrypted in this browser's IndexedDB and survives reloads and sign-out. It is scoped to the owner, project and unit, contains no passwords, tokens or QR images, and is not synced to other devices or household accounts. If persistent storage is unavailable, the UI says that the log only lasts for the current tab. The demo uses this temporary mode deliberately.
+
+Use the month selector to view observed bookings by facility-use month and recorded actions by action month, all in Singapore time. These totals are not an authoritative quota balance or complete historical cancellation audit. **Export log** downloads the available records as JSON; **Clear this unit's log** asks for confirmation and removes only this browser's selected account/unit records. It does not cancel estate bookings. The log has no time-based expiry; it retains up to 5,000 booking observations and 10,000 action records per scope and reports any older records omitted by those limits.
+
+## Stay signed in
+
+Sign in once and Sesame keeps the issued estate session and selected unit in this browser across refreshes, closed tabs, and app/browser restarts. Sesame has no two-hour idle or twelve-hour login expiry. It never saves your password. Existing tab-only logins migrate automatically when available.
+
+Use **Sign out** to remove the saved login. Clearing site data, using a different browser/storage container, or the estate expiring/revoking the session can require another sign-in. Network interruptions do not erase it. The estate has no verified passwordless renewal endpoint, so Sesame does not pretend to renew an expired token. When site storage is blocked, the app explains that sign-in only lasts in the current tab.
+
+The browser connects directly to the estate's HTTPS API; no extra backend or local server is required. The optional loopback server also keeps its cookie across browser restarts and no longer has the short session timers, but restarting that development server clears its in-memory sessions. Account maintenance and password resets remain in the estate app. The saved resident entry pass is independent of the booking session.
 
 ## iPhone
 
@@ -53,6 +75,6 @@ These settings are excluded from searchable Git source, but the website necessar
 
 Changes enter `main` through a pull request with the required `verify` check. Tests run without secrets or deployment permissions. A separate fresh runner builds the allowlisted `dist` artifact without installing npm dependencies or sharing caches, then a third job deploys it. HTTPS, restricted deployment permissions and secret scanning remain enabled. `npm run audit:publication` checks tracked public files before manual publication.
 
-The automated tests cover the simplified booking flow, price/ownership/duplicate protections, API errors, QR decoding, indefinite saved-pass compatibility and private-data handling. Real login and read-only availability were previously verified; no real bookings, payments, emails or profile changes were made during testing. Physical iPhone rendering and reader acceptance are unverified.
+The automated tests use simulated estate data and cover booking/access ownership, paid/free cancellation, uncertain results, QR refresh cleanup, encrypted activity persistence/export, date/month handling, and the existing login/entry-pass flows. A separate authorized live check confirmed cancellation and slot release for one existing free tennis booking; a read-only check confirmed the estate returns PNG booking QR images with a ten-second interval. Automated checks do not make live reservations, cancellations, payments, emails or profile changes. Physical iPhone rendering and reader acceptance remain unverified.
 
 See [SECURITY.md](SECURITY.md) for security boundaries and [ASSETS.md](ASSETS.md) for image and QR-encoder provenance. The public source contains no personal credentials or entry QR.

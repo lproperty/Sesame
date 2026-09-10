@@ -2,28 +2,27 @@ import { OwnerPortal } from "../lib/portal.mjs";
 import { createUpstream, AppError, API_BASE } from "../lib/upstream.mjs";
 import { identifier, normalizeUnit, requiredString } from "../lib/model.mjs";
 
-const SESSION_TTL = 12 * 60 * 60_000;
-const SESSION_IDLE = 2 * 60 * 60_000;
-export const SESSION_STORAGE_KEY = "sesame-owner-session-v1";
+export const SESSION_STORAGE_KEY = "sesame-owner-session-v2";
+export const LEGACY_SESSION_STORAGE_KEY = "sesame-owner-session-v1";
 
-function browserSessionStorage() {
+function browserStorage(name) {
   try {
-    return globalThis.sessionStorage ?? null;
+    return globalThis[name] ?? null;
   } catch {
     return null;
   }
 }
 
-// This facade stays inside the page. Only createUpstream contacts the estate's
-// fixed HTTPS API; /api/... below is an internal route, never a GitHub request.
-// Tab-scoped sessionStorage keeps sign-in across reloads. Passwords are never
-// stored, and the bearer token is never included in UI responses or logs.
+// Keep only the issued estate session, never the password. The durable record
+// survives closing a tab/app; estate authentication remains authoritative.
 export function createLiveRequest({
   fetchImpl = fetch,
   now = Date.now,
   readOnly = false,
   payment,
-  storage = browserSessionStorage(),
+  storage = browserStorage("localStorage"),
+  legacyStorage = browserStorage("sessionStorage"),
+  eventTarget = globalThis,
 } = {}) {
   const portal = new OwnerPortal({
     upstream: createUpstream({ fetchImpl, readOnly }),
@@ -36,6 +35,7 @@ export function createLiveRequest({
   let signingIn = false;
   let mutationCount = 0;
   let loginAttempts = [];
+  let storageUnavailable = !storage;
   const configuration = () => ({
     ...portal.configuration(),
     browserClient: true,
@@ -43,85 +43,90 @@ export function createLiveRequest({
   const sessionView = () => ({
     ...portal.sessionView(session),
     browserClient: true,
+    loginPersistence:
+      session?.persisted && !storageUnavailable ? "device" : "memory",
   });
-  const clearSavedSession = () => {
+  const readSaved = () => {
     try {
-      storage?.removeItem(SESSION_STORAGE_KEY);
+      const value = storage?.getItem(SESSION_STORAGE_KEY) ?? null;
+      storageUnavailable = !storage;
+      return value;
     } catch {
-      // Browsers can deny storage; in-memory sign-in must still work.
+      storageUnavailable = true;
+      return undefined;
     }
   };
-  const saveSession = () => {
-    if (!session) return;
+  const parseSaved = (value) => {
     try {
+      return typeof value === "string" && value.length <= 64_000
+        ? JSON.parse(value)
+        : null;
+    } catch {
+      return null;
+    }
+  };
+  const clearLegacy = () => {
+    try {
+      legacyStorage?.removeItem(LEGACY_SESSION_STORAGE_KEY);
+    } catch {}
+  };
+  const isSameLogin = (record) =>
+    record?.version === 2 &&
+    record.apiBase === API_BASE &&
+    !record.signedOut &&
+    record.sessionId === session?.rememberId &&
+    record.token === session?.token;
+  const markSignedOut = (expectedRaw) => {
+    if (readSaved() !== expectedRaw) return;
+    try {
+      // A credential-free tombstone stops an old tab's v1 login from being
+      // migrated back after explicit logout or estate invalidation.
       storage?.setItem(
         SESSION_STORAGE_KEY,
+        JSON.stringify({ version: 2, apiBase: API_BASE, signedOut: true }),
+      );
+    } catch {
+      // Quota failures can prevent writes while still allowing removal. Do
+      // not leave an older account as the apparent saved login after a switch.
+      try {
+        if (readSaved() === expectedRaw)
+          storage?.removeItem(SESSION_STORAGE_KEY);
+      } catch {}
+      storageUnavailable = true;
+    }
+    clearLegacy();
+  };
+  const saveSession = ({ force = false, expectedRaw } = {}) => {
+    if (!session) return false;
+    const current = readSaved();
+    if (
+      force
+        ? current !== expectedRaw
+        : current !== undefined && !isSameLogin(parseSaved(current))
+    )
+      return false;
+    try {
+      if (!storage) return false;
+      storage.setItem(
+        SESSION_STORAGE_KEY,
         JSON.stringify({
-          version: 1,
+          version: 2,
           apiBase: API_BASE,
+          sessionId: session.rememberId,
           token: session.token,
           user: { id: session.user.id, name: session.user.name },
           units: session.units.map(normalizeUnit),
           unitId: session.unit?.unitId ?? null,
           projectId: session.unit?.projectId ?? null,
-          expiresAt: session.expiresAt,
-          lastSeen: session.lastSeen,
         }),
       );
+      session.persisted = true;
+      storageUnavailable = false;
+      clearLegacy();
+      return true;
     } catch {
-      clearSavedSession();
-    }
-  };
-  const restoreSession = () => {
-    try {
-      const saved = storage?.getItem(SESSION_STORAGE_KEY);
-      if (!saved) return;
-      if (saved.length > 64_000) throw new Error("Invalid saved session.");
-      const record = JSON.parse(saved);
-      const time = now();
-      if (
-        record?.version !== 1 ||
-        record.apiBase !== API_BASE ||
-        !Number.isFinite(record.expiresAt) ||
-        !Number.isFinite(record.lastSeen) ||
-        record.expiresAt <= time ||
-        record.expiresAt > time + SESSION_TTL ||
-        record.lastSeen > time ||
-        record.lastSeen + SESSION_IDLE <= time ||
-        !Array.isArray(record.units) ||
-        record.units.length > 100 ||
-        record.units.some((unit) => unit?.userType !== 0)
-      )
-        throw new Error("Invalid or expired saved session.");
-      const units = record.units.map(normalizeUnit);
-      const unit =
-        record.unitId === null && record.projectId === null
-          ? null
-          : units.find(
-              (candidate) =>
-                candidate.unitId === record.unitId &&
-                candidate.projectId === record.projectId,
-            );
-      if (unit === undefined || (!unit && units.length))
-        throw new Error("Invalid saved unit.");
-      session = {
-        token: requiredString(record.token, "session token", 16_000),
-        user: {
-          id: identifier(record.user?.id, "owner"),
-          name: requiredString(record.user?.name, "owner name"),
-        },
-        units,
-        unit,
-        csrf: crypto.randomUUID(),
-        expiresAt: record.expiresAt,
-        lastSeen: record.lastSeen,
-        // Re-read booking data after reload; never replay saved submissions.
-        quotes: new Map(),
-        facilities: new Map(),
-      };
-    } catch {
-      session = null;
-      clearSavedSession();
+      storageUnavailable = true;
+      return false;
     }
   };
   const dropSession = () => {
@@ -130,29 +135,115 @@ export function createLiveRequest({
     epoch++;
   };
   const forget = () => {
-    clearSavedSession();
+    const current = readSaved();
+    // A delayed 401/disposal from one tab must not erase another tab's login.
+    if (
+      session &&
+      (current === undefined ||
+        isSameLogin(parseSaved(current)) ||
+        (!session.persisted &&
+          (current === null || current === session.replacedSnapshot)))
+    )
+      markSignedOut(current);
+    clearLegacy();
     dropSession();
   };
+  const synchronizeLogin = (notify = false) => {
+    if (!session?.persisted) return true;
+    const current = readSaved();
+    if (current === undefined || isSameLogin(parseSaved(current))) return true;
+    dropSession();
+    clearLegacy();
+    if (notify) {
+      try {
+        const EventType = eventTarget.Event || globalThis.Event;
+        eventTarget.dispatchEvent?.(new EventType("sesame-session-ended"));
+      } catch {}
+    }
+    return false;
+  };
+  const hydrate = (record, legacy = false) => {
+    if (
+      !record ||
+      record.apiBase !== API_BASE ||
+      record.signedOut ||
+      record.version !== (legacy ? 1 : 2) ||
+      !Array.isArray(record.units) ||
+      record.units.length > 100 ||
+      record.units.some((unit) => unit?.userType !== 0)
+    )
+      throw new Error("Invalid saved session.");
+    const units = record.units.map(normalizeUnit);
+    const unit =
+      record.unitId === null && record.projectId === null
+        ? null
+        : units.find(
+            (candidate) =>
+              candidate.unitId === record.unitId &&
+              candidate.projectId === record.projectId,
+          );
+    if (unit === undefined || (!unit && units.length))
+      throw new Error("Invalid saved unit.");
+    return {
+      token: requiredString(record.token, "session token", 16_000),
+      rememberId: legacy
+        ? crypto.randomUUID()
+        : identifier(record.sessionId, "saved login"),
+      user: {
+        id: identifier(record.user?.id, "owner"),
+        name: requiredString(record.user?.name, "owner name"),
+      },
+      units,
+      unit,
+      csrf: crypto.randomUUID(),
+      persisted: !legacy,
+      // Closing/reopening never replays submissions or restores stale quotes.
+      quotes: new Map(),
+      facilities: new Map(),
+    };
+  };
+  const restoreSession = () => {
+    const current = readSaved();
+    if (current != null) {
+      const record = parseSaved(current);
+      if (record?.signedOut) {
+        clearLegacy();
+        return;
+      }
+      try {
+        session = hydrate(record);
+        clearLegacy();
+      } catch {
+        markSignedOut(current);
+      }
+      return;
+    }
+    let legacy;
+    try {
+      legacy = legacyStorage?.getItem(LEGACY_SESSION_STORAGE_KEY);
+    } catch {}
+    if (!legacy) return;
+    try {
+      // The old 2h/12h fields were Sesame timers, not estate expiry metadata.
+      // Migrate the existing token and let the estate decide whether it is valid.
+      session = hydrate(parseSaved(legacy), true);
+      if (
+        !saveSession({ force: true, expectedRaw: current }) &&
+        readSaved() !== current
+      )
+        dropSession();
+    } catch {
+      clearLegacy();
+    }
+  };
   const requireSession = () => {
+    synchronizeLogin();
     if (!session)
       throw new AppError(
         "Sign in to your owner account to continue.",
         401,
         "SIGN_IN_REQUIRED",
       );
-    if (
-      session.expiresAt <= now() ||
-      session.lastSeen + SESSION_IDLE <= now()
-    ) {
-      forget();
-      throw new AppError(
-        "Your session has expired. Please sign in again.",
-        401,
-        "SESSION_EXPIRED",
-      );
-    }
-    session.lastSeen = now();
-    saveSession();
     return session;
   };
   const noMutationInProgress = () => {
@@ -227,21 +318,24 @@ export function createLiveRequest({
         );
       loginAttempts.push(now());
       signingIn = true;
+      const loginSnapshot = readSaved();
       const loginEpoch = ++epoch;
       try {
         const result = await portal.login(body);
-        if (loginEpoch !== epoch) {
+        if (loginEpoch !== epoch || readSaved() !== loginSnapshot) {
           result.token = "";
           throw new AppError("Sign-in was interrupted. Please try again.", 409);
         }
         if (session) session.token = "";
         session = Object.assign(result, {
-          expiresAt: now() + SESSION_TTL,
-          lastSeen: now(),
+          rememberId: crypto.randomUUID(),
+          persisted: false,
         });
         loginAttempts = [];
-        clearSavedSession();
-        saveSession();
+        if (!saveSession({ force: true, expectedRaw: loginSnapshot })) {
+          session.replacedSnapshot = loginSnapshot;
+          markSignedOut(loginSnapshot);
+        }
         return sessionView();
       } finally {
         body.cipher = "";
@@ -288,10 +382,12 @@ export function createLiveRequest({
     if (action === "POST /api/bookings/commit")
       return mutation(() => portal.commit(active, body));
     const reservation =
-      /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel)$/.exec(
+      /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel|qr)$/.exec(
         url.pathname,
       );
     if (reservation) {
+      if (method === "GET" && reservation[2] === "qr")
+        return portal.bookingAccess(active, reservation[1]);
       if (method === "GET" && reservation[2] === "payment")
         return portal.bookingPayment(active, reservation[1]);
       if (method === "POST" && reservation[2] === "payment")
@@ -320,6 +416,7 @@ export function createLiveRequest({
       });
     try {
       const value = await route(path, init);
+      if (!["/api/login", "/api/logout"].includes(path)) synchronizeLogin();
       if (
         requestEpoch !== epoch &&
         !["/api/login", "/api/logout"].includes(path)
@@ -363,9 +460,21 @@ export function createLiveRequest({
       );
     }
   };
-  request.dispose = forget;
+  const onStorage = (event) => {
+    if (event.key != null && event.key !== SESSION_STORAGE_KEY) return;
+    if (event.storageArea && event.storageArea !== storage) return;
+    synchronizeLogin(true);
+  };
+  eventTarget.addEventListener?.("storage", onStorage);
+  const detach = () => eventTarget.removeEventListener?.("storage", onStorage);
+  request.dispose = () => {
+    detach();
+    forget();
+  };
+  // The durable record was saved on login/unit choice. A closing stale tab
+  // must never write an old token back over logout or another account.
   request.suspend = () => {
-    saveSession();
+    detach();
     dropSession();
   };
   restoreSession();

@@ -10,8 +10,9 @@ import { SITE_CONFIG } from "./lib/config.mjs";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const publicRoot = join(root, "public");
-const SESSION_TTL = 12 * 60 * 60_000;
-const SESSION_IDLE = 2 * 60 * 60_000;
+// The optional loopback server keeps its opaque cookie across browser restarts.
+// Browsers cap cookie lifetimes; there is no separate 2h/12h app timer.
+const SESSION_COOKIE_MAX_AGE = 400 * 24 * 60 * 60;
 const MIME = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
@@ -25,7 +26,7 @@ const MIME = {
   ".webmanifest": "application/manifest+json",
 };
 const HEADERS = {
-  "content-security-policy": `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' ${SITE_CONFIG.apiOrigin}; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+  "content-security-policy": `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: ${SITE_CONFIG.apiOrigin}; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   "referrer-policy": "no-referrer",
@@ -92,7 +93,7 @@ export function createApplication({
   const loginAttempts = new Map();
   const cookieName = demo ? "sesame_demo_session" : "sesame_owner_session";
   const cookie = (id, clear = false) =>
-    `${cookieName}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${clear ? 0 : SESSION_TTL / 1000}${secureCookie ? "; Secure" : ""}`;
+    `${cookieName}=${id}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${clear ? 0 : SESSION_COOKIE_MAX_AGE}${secureCookie ? "; Secure" : ""}`;
   const getSessionId = (req) =>
     req.headers.cookie
       ?.split(";")
@@ -108,18 +109,6 @@ export function createApplication({
         401,
         "SIGN_IN_REQUIRED",
       );
-    if (
-      session.expiresAt <= now() ||
-      session.lastSeen + SESSION_IDLE <= now()
-    ) {
-      sessions.delete(id);
-      throw new AppError(
-        "Your session has expired. Please sign in again.",
-        401,
-        "SESSION_EXPIRED",
-      );
-    }
-    session.lastSeen = now();
     return session;
   };
 
@@ -185,8 +174,6 @@ export function createApplication({
           const id = randomBytes(32).toString("base64url");
           Object.assign(session, {
             createdAt: now(),
-            expiresAt: now() + SESSION_TTL,
-            lastSeen: now(),
           });
           sessions.set(id, session);
           return json(res, 200, portal.sessionView(session), {
@@ -259,10 +246,16 @@ export function createApplication({
         if (req.method === "POST" && url.pathname === "/api/bookings/commit")
           return json(res, 200, await portal.commit(session, body));
         const reservation =
-          /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel)$/.exec(
+          /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel|qr)$/.exec(
             url.pathname,
           );
         if (reservation) {
+          if (req.method === "GET" && reservation[2] === "qr")
+            return json(
+              res,
+              200,
+              await portal.bookingAccess(session, reservation[1]),
+            );
           if (req.method === "GET" && reservation[2] === "payment")
             return json(
               res,
@@ -340,9 +333,6 @@ export function createApplication({
   server.requestTimeout = 75_000;
   server.headersTimeout = 10_000;
   const cleanup = setInterval(() => {
-    for (const [id, session] of sessions)
-      if (session.expiresAt < now() || session.lastSeen + SESSION_IDLE < now())
-        sessions.delete(id);
     for (const [ip, attempts] of loginAttempts)
       if (!attempts.some((t) => t > now() - 15 * 60_000))
         loginAttempts.delete(ip);

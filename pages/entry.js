@@ -12,8 +12,8 @@ if (window.top !== window.self) {
     ? (await import("./runtime.mjs")).createDemoRequest()
     : (await import("./live.mjs")).createLiveRequest();
   globalThis.sesameRequest = request;
-  // Clear the old page's private state, while preserving tab-scoped sign-in
-  // for refreshes and Safari's back/forward-cache reload below.
+  // Clear this page's private state while preserving device sign-in for the
+  // next launch and Safari's back/forward-cache reload below.
   window.addEventListener("pagehide", () => {
     if (request.suspend) request.suspend();
     else request.dispose?.();
