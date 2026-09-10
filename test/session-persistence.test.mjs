@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createLiveRequest, SESSION_STORAGE_KEY } from "../pages/live.mjs";
+import {
+  createLiveRequest,
+  SESSION_STORAGE_KEY,
+  LEGACY_SESSION_STORAGE_KEY,
+} from "../pages/live.mjs";
 import { createDemoUpstream } from "../lib/demo.mjs";
 import { API_BASE, ROUTES, WRITE_OPERATIONS } from "../lib/upstream.mjs";
 
@@ -50,8 +54,14 @@ function fixture(storage = memoryStorage()) {
     const data = await estate(operation, body, context);
     return new Response(JSON.stringify({ code: 1200, data }));
   };
-  f.open = () => {
-    const client = createLiveRequest({ storage, now, fetchImpl });
+  f.open = (options = {}) => {
+    const client = createLiveRequest({
+      storage,
+      now,
+      fetchImpl,
+      legacyStorage: null,
+      ...options,
+    });
     let csrf = "";
     const request = async (path, body) =>
       client(
@@ -102,8 +112,232 @@ async function preview(handle) {
   return response.json();
 }
 
+test("an old tab cannot restore a logout or overwrite a newer login on suspension", async () => {
+  const f = fixture();
+  const first = f.open();
+  await first.login();
+  const stale = f.open();
+  await stale.session();
+  await first.request("/api/logout", {});
+  const marker = f.storage.getItem(SESSION_STORAGE_KEY);
+  stale.client.suspend();
+  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), marker);
+  assert.equal((await f.open().request("/api/session")).status, 401);
+  const newer = f.open();
+  await newer.login();
+  const replacement = f.storage.getItem(SESSION_STORAGE_KEY);
+  stale.client.dispose();
+  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), replacement);
+  await f.open().session();
+});
+
+test("another tab's logout is checked before any estate request", async () => {
+  const f = fixture();
+  const first = f.open();
+  await first.login();
+  const second = f.open();
+  await second.session();
+  await first.request("/api/logout", {});
+  const count = f.requests.length;
+  assert.equal((await second.request("/api/facilities")).status, 401);
+  assert.equal(f.requests.length, count);
+});
+
+test("an old request's expired-token response cannot clear a newer saved login", async () => {
+  const f = fixture();
+  const first = f.open();
+  await first.login();
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  f.before = (op) => (op === "facilities" ? gate : undefined);
+  f.override = (op) =>
+    op === "facilities"
+      ? new Response(JSON.stringify({ code: 1401, message: "Expired" }), {
+          status: 401,
+        })
+      : undefined;
+  const oldRequest = first.request("/api/facilities");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const newer = f.open();
+  await newer.login();
+  const saved = f.storage.getItem(SESSION_STORAGE_KEY);
+  release();
+  assert.equal((await oldRequest).status, 401);
+  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), saved);
+  await f.open().session();
+});
+
+test("a delayed sign-in cannot overwrite a later cross-tab logout or account replacement", async (t) => {
+  for (const replace of [false, true])
+    await t.test(replace ? "new login" : "logout", async () => {
+      const f = fixture();
+      const first = f.open();
+      await first.login();
+      const other = f.open();
+      await other.session();
+      let release;
+      const gate = new Promise((resolve) => {
+        release = resolve;
+      });
+      let held = false;
+      f.before = (op) => {
+        if (op === "login" && !held) {
+          held = true;
+          return gate;
+        }
+      };
+      const late = first.request("/api/login", {
+        phoneOrEmail: "demo",
+        cipher: "demo",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (replace) await other.login();
+      else await other.request("/api/logout", {});
+      const saved = f.storage.getItem(SESSION_STORAGE_KEY);
+      release();
+      assert.equal((await late).status, 409);
+      assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), saved);
+    });
+});
+
+test("old tab logins migrate once without obsolete client deadlines and cannot undo logout", async () => {
+  const f = fixture();
+  const original = f.open();
+  await original.login();
+  const record = JSON.parse(f.storage.getItem(SESSION_STORAGE_KEY));
+  const legacy = { ...record, version: 1, expiresAt: 1, lastSeen: 1 };
+  delete legacy.sessionId;
+  original.client.suspend();
+  f.storage.removeItem(SESSION_STORAGE_KEY);
+  const tabStore = memoryStorage();
+  tabStore.setItem(LEGACY_SESSION_STORAGE_KEY, JSON.stringify(legacy));
+  const migrated = f.open({ legacyStorage: tabStore });
+  const view = await migrated.session();
+  assert.equal(view.user.id, record.user.id);
+  assert.equal(tabStore.getItem(LEGACY_SESSION_STORAGE_KEY), null);
+  assert.equal(JSON.parse(f.storage.getItem(SESSION_STORAGE_KEY)).version, 2);
+  await migrated.request("/api/logout", {});
+  const staleTab = memoryStorage();
+  staleTab.setItem(LEGACY_SESSION_STORAGE_KEY, JSON.stringify(legacy));
+  assert.equal(
+    (await f.open({ legacyStorage: staleTab }).request("/api/session")).status,
+    401,
+  );
+  assert.equal(staleTab.getItem(LEGACY_SESSION_STORAGE_KEY), null);
+});
+
+test("default storage survives a fresh tab with an empty sessionStorage", async () => {
+  const localDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "localStorage",
+  );
+  const sessionDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "sessionStorage",
+  );
+  const durable = memoryStorage();
+  try {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: durable,
+    });
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: memoryStorage(),
+    });
+    const f = fixture();
+    const first = f.open({ storage: undefined, legacyStorage: undefined });
+    await first.login();
+    first.client.suspend();
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      value: memoryStorage(),
+    });
+    f.advance(45 * 24 * HOUR);
+    const fresh = f.open({ storage: undefined, legacyStorage: undefined });
+    assert.equal((await fresh.session()).loginPersistence, "device");
+    assert.equal(
+      f.requests.filter((row) => row.operation === "login").length,
+      1,
+    );
+  } finally {
+    if (localDescriptor)
+      Object.defineProperty(globalThis, "localStorage", localDescriptor);
+    else delete globalThis.localStorage;
+    if (sessionDescriptor)
+      Object.defineProperty(globalThis, "sessionStorage", sessionDescriptor);
+    else delete globalThis.sessionStorage;
+  }
+});
+
+test("a failed account-switch save cannot revive the older account after explicit sign-out", async () => {
+  const storage = memoryStorage();
+  const f = fixture(storage);
+  const first = f.open();
+  await first.login();
+  const old = storage.getItem(SESSION_STORAGE_KEY);
+  const write = storage.setItem,
+    remove = storage.removeItem;
+  let blocked = true;
+  storage.setItem = (key, value) => {
+    if (blocked) throw new Error("Synthetic denied write");
+    write(key, value);
+  };
+  storage.removeItem = (key) => {
+    if (blocked) throw new Error("Synthetic denied removal");
+    remove(key);
+  };
+  f.override = (op) =>
+    op === "login"
+      ? new Response(
+          JSON.stringify({
+            code: 1200,
+            data: {
+              token: "local-demo-token",
+              ownerLoginOutDTO: { id: "other-owner", username: "Other owner" },
+            },
+          }),
+        )
+      : undefined;
+  const second = f.open();
+  const signedIn = await second.login();
+  assert.equal(signedIn.user.id, "other-owner");
+  assert.equal(signedIn.loginPersistence, "memory");
+  assert.equal(storage.getItem(SESSION_STORAGE_KEY), old);
+  blocked = false;
+  assert.equal((await second.request("/api/logout", {})).status, 200);
+  assert.equal(
+    JSON.parse(storage.getItem(SESSION_STORAGE_KEY)).signedOut,
+    true,
+  );
+  assert.equal((await f.open().request("/api/session")).status, 401);
+});
+
+test("storage events invalidate the old in-memory page without erasing its replacement", async () => {
+  const target = new EventTarget();
+  let invalidations = 0;
+  target.addEventListener("sesame-session-ended", () => invalidations++);
+  const f = fixture();
+  const first = f.open({ eventTarget: target });
+  await first.login();
+  const second = f.open();
+  await second.login();
+  const saved = f.storage.getItem(SESSION_STORAGE_KEY);
+  const event = new Event("storage");
+  Object.defineProperty(event, "key", { value: SESSION_STORAGE_KEY });
+  target.dispatchEvent(event);
+  assert.equal(invalidations, 1);
+  assert.equal((await first.request("/api/session")).status, 401);
+  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), saved);
+  first.client.suspend();
+  target.dispatchEvent(event);
+  assert.equal(invalidations, 1);
+});
+
 test("refresh restores the selected owner unit without another login or stale booking data", async () => {
-  assert.equal(SESSION_STORAGE_KEY, "sesame-owner-session-v1");
+  assert.equal(SESSION_STORAGE_KEY, "sesame-owner-session-v2");
   const f = fixture();
   const first = f.open();
   const signedIn = await first.login();
@@ -155,45 +389,36 @@ test("refresh restores the selected owner unit without another login or stale bo
   );
 });
 
-test("refresh preserves the original idle deadline and persists subsequent activity", async () => {
+test("closing and reopening after long inactivity keeps the issued login and selected unit", async () => {
   const f = fixture();
   const first = f.open();
   await first.login();
+  await first.unit("demo-unit-2");
+  const before = f.storage.getItem(SESSION_STORAGE_KEY);
   first.client.suspend();
-  f.advance(2 * HOUR);
-  assert.equal((await f.open().request("/api/session")).status, 401);
-  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), null);
-
-  const next = f.open();
-  await next.login();
-  next.client.suspend();
-  f.advance(HOUR);
-  const active = f.open();
-  await active.session();
-  active.client.suspend();
-  f.advance(HOUR + 1);
-  const later = f.open();
-  await later.session();
-  later.client.suspend();
-  f.advance(2 * HOUR);
-  assert.equal((await f.open().request("/api/session")).status, 401);
-  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), null);
+  f.advance(35 * 24 * HOUR);
+  const reopened = f.open();
+  const view = await reopened.session();
+  assert.equal(view.loginPersistence, "device");
+  assert.equal(view.unit.unitId, "demo-unit-2");
+  assert.equal((await reopened.request("/api/facilities")).status, 200);
+  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), before);
+  assert.equal(f.requests.filter((row) => row.operation === "login").length, 1);
+  assert.equal(JSON.parse(before).expiresAt, undefined);
+  assert.equal(JSON.parse(before).lastSeen, undefined);
 });
 
-test("repeated refreshes and activity cannot renew the twelve-hour absolute lifetime", async () => {
+test("repeated launches do not impose a twelve-hour or idle logout", async () => {
   const f = fixture();
   let active = f.open();
   await active.login();
-  for (let hour = 1; hour < 12; hour++) {
+  for (let launch = 0; launch < 6; launch++) {
     active.client.suspend();
-    f.advance(HOUR);
+    f.advance(20 * 24 * HOUR);
     active = f.open();
     await active.session();
   }
-  active.client.suspend();
-  f.advance(HOUR);
-  assert.equal((await f.open().request("/api/session")).status, 401);
-  assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), null);
+  assert.equal((await active.request("/api/facilities")).status, 200);
   assert.equal(
     f.requests.filter(({ operation }) => operation === "login").length,
     1,
@@ -210,7 +435,10 @@ test("explicit logout and disposal remove the saved login", async (t) => {
       if (action === "logout")
         assert.equal((await active.request("/api/logout", {})).status, 200);
       else active.client.dispose();
-      assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), null);
+      assert.equal(
+        JSON.parse(f.storage.getItem(SESSION_STORAGE_KEY)).signedOut,
+        true,
+      );
       assert.equal((await active.request("/api/session")).status, 401);
       assert.equal((await f.open().request("/api/session")).status, 401);
     });
@@ -239,7 +467,10 @@ test("the estate rejecting an expired token clears saved authentication", async 
       const response = await active.request("/api/facilities");
       assert.equal(response.status, 401);
       assert.equal((await response.json()).error.code, "SESSION_EXPIRED");
-      assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), null);
+      assert.equal(
+        JSON.parse(f.storage.getItem(SESSION_STORAGE_KEY)).signedOut,
+        true,
+      );
       assert.equal((await f.open().request("/api/session")).status, 401);
     });
 });
@@ -274,7 +505,10 @@ test("malformed saved state is discarded and does not prevent a later sign-in", 
       const f = fixture(storage);
       const active = f.open();
       assert.equal((await active.request("/api/session")).status, 401);
-      assert.equal(storage.getItem(SESSION_STORAGE_KEY), null);
+      assert.equal(
+        JSON.parse(storage.getItem(SESSION_STORAGE_KEY)).signedOut,
+        true,
+      );
       assert.equal(f.requests.length, 0);
       await active.login();
       await active.session();
@@ -314,7 +548,10 @@ test("a saved login cannot restore a foreign unit or another estate's token", as
       f.storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(record));
       const calls = f.requests.length;
       assert.equal((await f.open().request("/api/session")).status, 401);
-      assert.equal(f.storage.getItem(SESSION_STORAGE_KEY), null);
+      assert.equal(
+        JSON.parse(f.storage.getItem(SESSION_STORAGE_KEY)).signedOut,
+        true,
+      );
       assert.equal(f.requests.length, calls);
     });
 });

@@ -5,6 +5,11 @@ import {
   ENTRY_REFRESH_MS,
 } from "./entry-pass.js";
 import { createPassStore } from "./pass-store.js";
+import {
+  activityScopeFromSession,
+  createActivityStore,
+  summarizeActivity,
+} from "./activity-store.js";
 
 const app = document.querySelector("#app");
 const modal = document.querySelector("#modal");
@@ -39,13 +44,157 @@ const state = {
   routeGeneration: 0,
   availabilityGeneration: 0,
   committing: false,
+  switchingUnit: false,
   modalType: "",
   bookings: [],
+  bookingDetail: null,
   tab: "current",
   savedPass: null,
   savingPass: false,
+  activity: null,
+  activityMonth: "",
+  activityStorageError: "",
+  activitySyncError: "",
 };
 const passStore = createPassStore();
+let activityStore = createActivityStore({ indexedDB: null });
+const localMonth = (value = Date.now()) =>
+  new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Singapore",
+    year: "numeric",
+    month: "2-digit",
+  })
+    .format(new Date(value))
+    .slice(0, 7);
+const activityScope = () => {
+  try {
+    return activityScopeFromSession(state.session);
+  } catch {
+    return null;
+  }
+};
+const sameActivityScope = (scope) =>
+  scope && JSON.stringify(scope) === JSON.stringify(activityScope());
+const freeBooking = (booking) => booking?.price === 0 && booking?.amount === 0;
+const bookingFromView = (id) =>
+  state.bookings.find((booking) => booking.id === id) ||
+  (state.bookingDetail?.booking.id === id &&
+  sameActivityScope(state.bookingDetail.scope)
+    ? state.bookingDetail.booking
+    : null);
+const futureFreeTennis = (booking) => {
+  const value = String(booking?.startTime || "").replace(" ", "T");
+  const timestamp = Date.parse(
+    value + (/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? "" : "+08:00"),
+  );
+  return (
+    booking?.tab === "current" &&
+    freeBooking(booking) &&
+    /tennis/i.test(booking.facilityName || "") &&
+    timestamp > Date.now()
+  );
+};
+const activityTime = (value) => {
+  if (!value) return "Time not provided";
+  const text = String(value).replace(" ", "T");
+  const date = new Date(
+    text + (/(?:Z|[+-]\d{2}:\d{2})$/.test(text) ? "" : "+08:00"),
+  );
+  return Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat("en-SG", {
+        timeZone: "Asia/Singapore",
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }).format(date)
+    : "Time not provided";
+};
+
+async function observeActivity(scope, bookings, tab) {
+  if (!scope) return null;
+  try {
+    const log = await activityStore.observe(scope, bookings, { tab });
+    if (sameActivityScope(scope)) {
+      state.activity = log;
+      state.activityStorageError = log.storageError || "";
+    }
+    return log;
+  } catch {
+    if (sameActivityScope(scope))
+      state.activityStorageError =
+        "Activity could not be saved. Booking actions still work; export any available log before closing this tab.";
+    return null;
+  }
+}
+
+async function beginActivityAction(action, booking) {
+  const scope = activityScope();
+  if (!scope) return null;
+  try {
+    const result = await activityStore.recordAction(scope, {
+      action,
+      outcome: "uncertain",
+      booking,
+    });
+    if (sameActivityScope(scope))
+      state.activityStorageError = result.storageError || "";
+    return { scope, id: result.event.id, action, booking };
+  } catch {
+    state.activityStorageError =
+      "This action could not be added to the activity log. Check the estate result below.";
+    return null;
+  }
+}
+
+async function finishActivityAction(attempt, outcome, booking, errorCode) {
+  if (!attempt) return;
+  try {
+    const result = await activityStore.recordAction(attempt.scope, {
+      id: attempt.id,
+      action: attempt.action,
+      outcome,
+      booking: booking || attempt.booking,
+      errorCode,
+    });
+    if (sameActivityScope(attempt.scope))
+      state.activityStorageError = result.storageError || "";
+  } catch {
+    if (sameActivityScope(attempt.scope))
+      state.activityStorageError =
+        "The action result could not be saved to the local log. Check My bookings for its estate status.";
+  }
+}
+
+const activityBookingTime = (booking) =>
+  booking?.startTime
+    ? `${dateFormat(booking.startTime.slice(0, 10), { weekday: "short", year: "numeric" })} · ${timeRange(booking.startTime.slice(11), booking.endTime?.slice(11))}`
+    : "Booking time not provided";
+
+const uncertainError = (error) =>
+  !error?.code ||
+  [
+    "CONNECTION_INTERRUPTED",
+    "INTERNAL_ERROR",
+    "OUTCOME_UNCERTAIN",
+    "UPSTREAM_UNREACHABLE",
+    "UPSTREAM_RESPONSE",
+    "SESSION_CHANGED",
+  ].includes(error.code);
+const receiptBooking = (receipt) => ({
+  id: receipt.bookingId,
+  facilityId: receipt.facility?.id,
+  facilityName: receipt.facility?.name,
+  startTime: `${receipt.date} ${receipt.startTime}:00`,
+  endTime: `${receipt.date} ${receipt.endTime}:00`,
+  quantity: receipt.quantity,
+  price:
+    receipt.unitPrice ??
+    (receipt.quantity ? receipt.amount / receipt.quantity : null),
+  amount: receipt.amount,
+  tab: receipt.status === "confirmed_free" ? "current" : "unpaid",
+});
 const entryRoute = () =>
   ["", "qr"].includes(location.hash.replace(/^#\/?/, "").split("/")[0]);
 const savedPassReady = () => Boolean(state.savedPass);
@@ -189,6 +338,7 @@ function safeRichText(html) {
 }
 
 async function api(path, data) {
+  const requestSession = state.session;
   const headers = { accept: "application/json" };
   if (data !== undefined) {
     headers["content-type"] = "application/json";
@@ -225,9 +375,16 @@ async function api(path, data) {
     );
     error.code = value.error?.code;
     error.details = value.error?.details;
-    if (response.status === 401 && path !== "/api/login" && state.session) {
+    if (
+      response.status === 401 &&
+      path !== "/api/login" &&
+      state.session &&
+      state.session === requestSession
+    ) {
       state.session = null;
       state.bookings = [];
+      state.bookingDetail = null;
+      state.activity = null;
       state.facilities = [];
       state.detail = null;
       state.slots = [];
@@ -252,6 +409,7 @@ function toast(message, error = false) {
 
 function renderLogin(message = "") {
   stopEntry();
+  stopBookingQr();
   document.title = state.config.staticDemo
     ? "Explore · Sesame"
     : "Sign in · Sesame";
@@ -284,7 +442,7 @@ function renderLogin(message = "") {
         </form>
         ${state.config.staticDemo ? "" : '<div class="login-help"><span class="muted field-note">Signing in as a unit owner</span><button class="text-button" data-action="login-help">Need help signing in?</button></div>'}
         <p class="login-footnote">${icon("shield")} ${state.config.staticDemo ? "No sign-in or real payments. Refresh to start afresh." : state.config.browserClient ? "Sign-in goes directly to your estate over HTTPS." : "A private connection to your estate account."}</p>
-        ${state.config.browserClient ? '<p class="field-note">You stay signed in when this tab refreshes. Your password is never saved. Sesame is an independent resident portal.</p>' : ""}
+        ${state.config.browserClient ? '<p class="field-note">You stay signed in on this device when you reopen Sesame. Your password is never saved. Use Sign out to remove the saved login. Sesame is an independent resident portal.</p>' : ""}
         ${savedPassReady() && !state.config.demo ? '<button class="text-button full" data-action="show-entry">Back to my entry QR</button>' : ""}
       </div>
       <div class="login-bottom">Sesame &nbsp; · &nbsp; Spaces for the way you live</div>
@@ -310,19 +468,23 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       ? "qr"
       : section === "My bookings"
         ? "bookings"
-        : "facilities";
+        : section === "Activity"
+          ? "activity"
+          : "facilities";
   app.innerHTML = `<div class="app-layout">
     <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/qr" aria-label="My resident entry QR">${brand()}</a>
       <p class="nav-label">YOUR ESTATE</p>
       <nav><a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>
       <a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
-      <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a></nav>
+      <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a>
+      <a href="#/activity" class="nav-item ${active === "activity" ? "active" : ""}" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")} Activity log</a></nav>
       <div class="sidebar-spacer"></div>
       <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">${authenticated ? "Unit owner" : "Saved on this device"}</p></div><button class="icon-button" data-action="${authenticated ? "logout" : "forget-entry"}" title="${authenticated ? "Sign out" : "Forget saved pass"}" aria-label="${authenticated ? "Sign out" : "Forget saved pass"}">${icon("logout")}</button></div>
     </aside>
     <div class="workspace"><header class="topbar"><div class="topbar-crumb"><span>Resident services</span><span class="crumb-divider">/</span><span class="current">${esc(section)}</span></div>
       <div class="topbar-actions"><span class="property-tag">Resident portal</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
       ${state.config.staticDemo ? '<div class="mode-banner"><strong>PUBLIC DEMO</strong><span>Sample data only. No real bookings or payments.</span></div>' : state.config.demo ? '<div class="mode-banner"><strong>DEMO</strong> An offline preview. All bookings here are simulated.</div>' : state.config.readOnly ? '<div class="mode-banner readonly">Read-only mode · Explore facilities and availability. Submissions are disabled.</div>' : ""}
+      ${state.config.browserClient && state.session?.loginPersistence === "memory" ? '<div class="mode-banner readonly">This browser could not save your sign-in. It works in this tab, but reopening may require login. Allow storage for this site to stay signed in.</div>' : ""}
       <main class="page${active === "qr" ? " entry-page" : ""}" id="main-content" tabindex="-1">${content}
         <footer class="page-footer"><span>SESAME &nbsp; / &nbsp; RESIDENT PORTAL</span><span>${icon("clock")} All facility times are in Singapore time (SGT).</span></footer>
       </main>
@@ -331,6 +493,7 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       <a href="#/qr" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")}<span>My QR</span></a>
       <a href="#/facilities" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")}<span>Facilities</span></a>
       <a href="#/bookings" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")}<span>My bookings</span></a>
+      <a href="#/activity" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")}<span>Activity</span></a>
       <button type="button" data-action="${authenticated ? "logout" : "forget-entry"}">${icon("logout")}<span>${state.config.staticDemo ? "Exit demo" : authenticated ? "Sign out" : "Forget pass"}</span></button>
     </nav>
   </div>`;
@@ -616,13 +779,121 @@ function renderBookings() {
             .map((b) => {
               const date = b.startTime.slice(0, 10);
               const valid = /^\d{4}-\d{2}-\d{2}$/.test(date);
-              return `<article class="booking-row"><div class="booking-row-left"><div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div><div><h3>${esc(b.facilityName)}</h3><p class="booking-day">${valid ? `<time datetime="${esc(date)}">${esc(dateFormat(date, { weekday: "long", month: "long", year: "numeric" }))}</time>` : "Date unavailable"}</p><p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p><p class="booking-reference">Booking ${esc(b.id)}</p></div></div><div class="booking-row-right"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tabNames[tab]}</span><br><button class="text-button" data-action="booking-details" data-value="${esc(b.id)}">View details</button></div></article>`;
+              return `<article class="booking-row"><div class="booking-row-left"><div class="booking-date"><span>${valid ? esc(dateFormat(date, { day: undefined, month: "short" })) : "—"}</span><strong>${valid ? Number(date.slice(8)) : "—"}</strong></div><div><h3>${esc(b.facilityName)}</h3><p class="booking-day">${valid ? `<time datetime="${esc(date)}">${esc(dateFormat(date, { weekday: "long", month: "long", year: "numeric" }))}</time>` : "Date unavailable"}</p><p>${esc(timeRange(b.startTime.slice(11), b.endTime.slice(11)))} · ${b.quantity} ${b.quantity === 1 ? "session" : "sessions"}</p><p class="booking-reference">Booking ${esc(b.id)}</p></div></div><div class="booking-row-right"><strong>${esc(money(b.amount ?? (b.price == null ? null : b.price * b.quantity)))}</strong><span class="pill ${tab === "unpaid" ? "amber" : ""}">${tab === "current" && freeBooking(b) ? "Confirmed · Free" : tabNames[tab]}</span><br>${tab === "current" ? `<button class="text-button booking-qr-button" data-action="booking-qr" data-value="${esc(b.id)}">${icon("qr")} Entry QR</button>` : ""}<button class="text-button" data-action="booking-details" data-value="${esc(b.id)}">View details</button></div></article>`;
             })
             .join("")
         : `<section class="empty-state"><div class="empty-icon">${icon("calendarCheck")}</div><h2>${titles[tab]}</h2><p>${descriptions[tab]}</p><a class="button" href="#/facilities">Explore facilities ${icon("arrow")}</a></section>`
     }`,
     "My bookings",
   );
+}
+
+function renderActivity() {
+  document.title = "Activity log · Sesame";
+  const log = state.activity || { observations: [], events: [] };
+  const month = state.activityMonth || localMonth();
+  const summary = summarizeActivity(log, { month });
+  const events = log.events
+    .filter((event) => localMonth(event.attemptedAt) === month)
+    .sort((a, b) => b.attemptedAt.localeCompare(a.attemptedAt));
+  const observations = log.observations
+    .filter((booking) => booking.startTime?.slice(0, 7) === month)
+    .sort((a, b) => (b.startTime || "").localeCompare(a.startTime || ""));
+  const cancelled = new Set(
+    log.events
+      .filter(
+        (event) =>
+          event.action === "cancellation" && event.outcome === "success",
+      )
+      .map((event) => event.booking.id),
+  );
+  const resultLabel = (event) =>
+    event.outcome === "uncertain"
+      ? "Result unconfirmed"
+      : event.outcome === "failed"
+        ? "Request failed"
+        : event.action === "cancellation"
+          ? "Cancellation confirmed"
+          : "Booking submitted";
+  const metrics = [
+    [
+      "Bookings observed",
+      summary.byBookingMonth.observedBookings,
+      "By facility-use month",
+    ],
+    [
+      "Booking actions succeeded",
+      summary.byActionMonth.bookingSuccess,
+      "Actions recorded this month",
+    ],
+    [
+      "Cancellations confirmed",
+      summary.byActionMonth.cancellationSuccess,
+      "Actions recorded this month",
+    ],
+    [
+      "Unconfirmed actions",
+      summary.byActionMonth.bookingUncertain +
+        summary.byActionMonth.cancellationUncertain,
+      "Check the estate records before retrying",
+    ],
+  ];
+  renderShell(
+    `<div class="page-heading"><div><p class="eyebrow">THIS ACCOUNT · THIS DEVICE</p><h1>Your activity.</h1><p>Booking observations and actions recorded by Sesame, starting when you use it here.</p></div><button class="button secondary small" data-action="reload">${icon("refresh")} Refresh records</button></div>
+    <div class="activity-toolbar"><label for="activity-month">Month <input type="month" id="activity-month" value="${esc(month)}"></label><div class="activity-actions"><button class="button secondary small" data-action="export-activity">Export log</button><button class="text-button" data-action="clear-activity">Clear this unit’s log</button></div></div>
+    <p class="field-note">${log.persistent ? "Saved in this browser for this account and unit, including after sign-out. It is not synced to other devices." : state.config.demo ? "Demo activity stays in this tab and resets when the demo reloads." : esc(state.activityStorageError || log.storageError || "Activity is available in this tab only; it may not survive a refresh.")}</p>
+    ${state.activityStorageError && log.persistent ? `<p class="activity-warning" role="status">${esc(state.activityStorageError)}</p>` : ""}
+    ${state.activitySyncError ? `<p class="activity-warning" role="status">${esc(state.activitySyncError)}</p>` : ""}
+    <div class="activity-metrics">${metrics.map(([label, value, note]) => `<article class="activity-metric"><span>${esc(label)}</span><strong>${value}</strong><small>${esc(note)}</small></article>`).join("")}</div>
+    <p class="activity-note">These are observed activity totals. The estate has not provided a remaining-quota balance or complete cancellation history. A missing booking is never automatically recorded as cancelled.</p>
+    ${log.truncated?.events || log.truncated?.observations ? `<p class="activity-warning">Older records exceed this device’s log capacity (${log.truncated.events} action records and ${log.truncated.observations} booking observations omitted). Export regularly to keep your own archive.</p>` : ""}
+    <section class="activity-section"><h2>Recorded actions</h2><p class="section-note">Times below are when this device sent and checked the request.</p>${events.length ? `<ol class="activity-list">${events.map((event) => `<li class="activity-row"><div class="activity-symbol">${icon(event.action === "cancellation" ? "close" : "calendarCheck")}</div><div class="activity-copy"><h3>${esc(event.booking.facilityName)}</h3><p>${esc(activityBookingTime(event.booking))}</p><p class="activity-timestamp">Attempted ${esc(activityTime(event.attemptedAt))}${event.resolvedAt ? ` · Checked ${esc(activityTime(event.resolvedAt))}` : ""}</p>${event.booking.id ? `<p class="booking-reference">Booking ${esc(event.booking.id)}</p>` : ""}${event.errorCode ? `<p class="activity-timestamp">Result code: ${esc(event.errorCode)}</p>` : ""}</div><span class="pill ${event.outcome === "success" ? "" : "amber"}">${esc(resultLabel(event))}</span></li>`).join("")}</ol>` : '<div class="activity-empty">No actions recorded for this month. Booking and cancellation attempts made here will appear in this log.</div>'}</section>
+    <section class="activity-section"><h2>Bookings observed</h2><p class="section-note">The latest record Sesame saw for each booking. Other household accounts and earlier cancellations may not appear.</p>${observations.length ? `<ol class="activity-list">${observations.map((booking) => `<li class="activity-row"><div class="activity-copy"><h3>${esc(booking.facilityName)}</h3><p>${esc(activityBookingTime(booking))} · ${booking.quantity} session${booking.quantity === 1 ? "" : "s"} · ${freeBooking(booking) ? "Free" : esc(money(booking.amount))}</p><p class="activity-timestamp">First observed ${esc(activityTime(booking.firstObservedAt))}<br>Last observed ${esc(activityTime(booking.lastObservedAt))}${booking.orderTime || booking.createdAt ? `<br>Estate order time: ${esc(activityTime(booking.orderTime || booking.createdAt))}` : ""}</p><p class="booking-reference">Booking ${esc(booking.id)}</p></div><span class="pill">${cancelled.has(booking.id) ? "Cancelled in Sesame" : `Last seen: ${esc(tabNames[booking.tab] || "Observed")}`}</span></li>`).join("")}</ol>` : '<div class="activity-empty">No bookings have been observed for this facility-use month.</div>'}</section>`,
+    "Activity",
+  );
+}
+
+async function loadActivity(generation) {
+  const scope = activityScope();
+  if (!scope) return;
+  state.activityMonth ||= localMonth();
+  state.activitySyncError = "";
+  const reads = await Promise.allSettled(
+    ["current", "unpaid", "history"].map(async (tab) => ({
+      tab,
+      bookings: await api(`/api/bookings?tab=${tab}`),
+    })),
+  );
+  for (const result of reads) {
+    if (generation !== state.routeGeneration || !sameActivityScope(scope))
+      return;
+    if (result.status === "fulfilled")
+      await observeActivity(scope, result.value.bookings, result.value.tab);
+    else
+      state.activitySyncError =
+        "Some estate records could not be refreshed. Saved observations are still shown below.";
+  }
+  const log = await activityStore.load(scope);
+  if (generation !== state.routeGeneration || !sameActivityScope(scope)) return;
+  state.activity = log;
+  state.activityStorageError = log.storageError || state.activityStorageError;
+  renderActivity();
+}
+
+async function exportActivity() {
+  const scope = activityScope();
+  if (!scope) return;
+  const data = await activityStore.export(scope);
+  if (!sameActivityScope(scope)) return;
+  const blob = new Blob([data], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `sesame-activity-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function loadAvailability(date) {
@@ -678,7 +949,9 @@ async function loadAvailability(date) {
 }
 
 async function route() {
+  if (state.switchingUnit) return;
   stopEntry();
+  stopBookingQr();
   if (!state.session) {
     if (entryRoute() && savedPassReady() && !state.config.demo) renderEntry();
     else renderLogin();
@@ -687,6 +960,7 @@ async function route() {
   const generation = ++state.routeGeneration;
   state.availabilityGeneration++;
   state.detail = null;
+  state.bookingDetail = null;
   resetSelection();
   closeModal();
   const parts = location.hash.replace(/^#\/?/, "").split("/");
@@ -694,7 +968,9 @@ async function route() {
     ? "Entry QR"
     : parts[0] === "bookings"
       ? "My bookings"
-      : "Facilities";
+      : parts[0] === "activity"
+        ? "Activity"
+        : "Facilities";
   if (entryRoute()) {
     renderEntry();
     window.scrollTo(0, 0);
@@ -711,7 +987,9 @@ async function route() {
   renderLoading(section);
   window.scrollTo(0, 0);
   try {
-    if (parts[0] === "facility" && parts[1]) {
+    if (parts[0] === "activity") {
+      await loadActivity(generation);
+    } else if (parts[0] === "facility" && parts[1]) {
       const detail = await api(
         "/api/facilities/" + encodeURIComponent(parts[1]),
       );
@@ -721,9 +999,12 @@ async function route() {
       await loadAvailability(state.config.today);
     } else if (parts[0] === "bookings") {
       state.tab = Object.hasOwn(tabNames, parts[1]) ? parts[1] : "current";
+      const scope = activityScope();
       const bookings = await api("/api/bookings?tab=" + state.tab);
       if (generation !== state.routeGeneration) return;
       state.bookings = bookings;
+      await observeActivity(scope, bookings, state.tab);
+      if (generation !== state.routeGeneration) return;
       renderBookings();
     } else {
       const facilities = await api("/api/facilities");
@@ -737,7 +1018,108 @@ async function route() {
 }
 
 let returnFocus;
+let bookingQrTimer;
+let bookingQrGeneration = 0;
+let bookingQrInFlight = false;
+let activeBookingQr = null;
+
+function stopBookingQr({ retain = false } = {}) {
+  bookingQrGeneration++;
+  clearTimeout(bookingQrTimer);
+  document.querySelector("#booking-qr-images")?.replaceChildren();
+  if (!retain) activeBookingQr = null;
+}
+
+function visibleBookingQr(active) {
+  return (
+    active &&
+    active === activeBookingQr &&
+    !document.hidden &&
+    modal.open &&
+    state.modalType === "booking-qr" &&
+    active.routeGeneration === state.routeGeneration &&
+    sameActivityScope(active.scope)
+  );
+}
+
+async function refreshBookingQr(active = activeBookingQr) {
+  if (!visibleBookingQr(active) || bookingQrInFlight) return;
+  clearTimeout(bookingQrTimer);
+  bookingQrInFlight = true;
+  const generation = bookingQrGeneration;
+  const status = document.querySelector("#booking-qr-status");
+  if (status) status.textContent = "Getting a fresh entry code…";
+  try {
+    const result = await api(
+      `/api/bookings/${encodeURIComponent(active.id)}/qr`,
+    );
+    if (!visibleBookingQr(active) || generation !== bookingQrGeneration) return;
+    const images = document.querySelector("#booking-qr-images");
+    if (!images) return;
+    active.refreshMs =
+      Number.isFinite(result.refreshMs) &&
+      result.refreshMs >= 1000 &&
+      result.refreshMs <= 3_600_000
+        ? result.refreshMs
+        : 10_000;
+    images.innerHTML = result.images.length
+      ? result.images
+          .map(
+            (code, index) =>
+              `<figure class="booking-qr-image"><img data-booking-qr src="${esc(code.src)}" alt="${esc(code.label)}" width="220" height="220" referrerpolicy="no-referrer"><figcaption>${result.images.length > 1 ? `Entry code ${index + 1}` : "Facility entry"}</figcaption></figure>`,
+          )
+          .join("")
+      : '<p class="activity-empty">The estate has not returned an entry QR for this booking yet.</p>';
+    status.textContent = result.images.length
+      ? `Updated ${new Intl.DateTimeFormat("en-SG", { timeZone: "Asia/Singapore", hour: "numeric", minute: "2-digit", second: "2-digit" }).format(new Date(result.updatedAt))} · refreshes every ${active.refreshMs / 1000} seconds`
+      : "It will check again automatically while this screen is open.";
+  } catch (error) {
+    if (!visibleBookingQr(active) || generation !== bookingQrGeneration) return;
+    document.querySelector("#booking-qr-images")?.replaceChildren();
+    if (status) status.textContent = error.message;
+    active.terminal = [
+      "BOOKING_NOT_FOUND",
+      "BOOKING_ENDED",
+      "BOOKING_NOT_CONFIRMED",
+      "UNIT_CHANGED",
+      "SESSION_CHANGED",
+      "SESSION_EXPIRED",
+      "SIGN_IN_REQUIRED",
+    ].includes(error.code);
+  } finally {
+    bookingQrInFlight = false;
+    const next = activeBookingQr;
+    if (visibleBookingQr(next) && !next.terminal)
+      bookingQrTimer = setTimeout(
+        () => void refreshBookingQr(next),
+        next === active && generation === bookingQrGeneration
+          ? next.refreshMs
+          : 0,
+      );
+  }
+}
+
+function showBookingQr(id) {
+  const booking = bookingFromView(id);
+  if (!booking || booking.tab !== "current" || !state.session) return;
+  openModal(
+    "booking-qr",
+    booking.facilityName,
+    `<p class="modal-copy">${esc(activityBookingTime(booking))}</p><p>Hold the entry code up to the facility reader for this booking.</p><div id="booking-qr-images" class="booking-qr-images"><span class="spinner" aria-label="Loading booking QR"></span></div><p id="booking-qr-status" class="entry-status" role="status">Getting a fresh entry code…</p>${state.config.demo ? '<p class="entry-note">Demo code only. It cannot open a facility.</p>' : ""}<div class="modal-actions"><button class="button secondary" data-action="refresh-booking-qr">${icon("refresh")} Refresh code</button><button class="button secondary" data-action="booking-details" data-value="${esc(id)}">Booking details</button></div>`,
+    "BOOKING ENTRY QR",
+  );
+  activeBookingQr = {
+    id,
+    scope: activityScope(),
+    routeGeneration: state.routeGeneration,
+    refreshMs: 10_000,
+    terminal: false,
+  };
+  void refreshBookingQr(activeBookingQr);
+}
+
 function openModal(type, heading, body, eyebrow = "SESAME") {
+  stopBookingQr();
   if (!modal.open) returnFocus = document.activeElement;
   state.modalType = type;
   modal.innerHTML = `<header class="modal-head"><div><p class="eyebrow">${esc(eyebrow)}</p><h2 id="modal-title">${esc(heading)}</h2></div><button class="icon-button" data-action="close-modal" aria-label="Close dialog">${icon("close")}</button></header><div class="modal-body">${body}</div>`;
@@ -747,14 +1129,18 @@ function openModal(type, heading, body, eyebrow = "SESAME") {
 
 function closeModal() {
   if (state.committing) return;
+  stopBookingQr();
   if (modal.open) modal.close();
   state.modalType = "";
+  state.bookingDetail = null;
 }
 
 modal.addEventListener("close", () => {
   if (modal.open) return;
+  stopBookingQr();
   document.documentElement.classList.remove("modal-open");
   state.modalType = "";
+  state.bookingDetail = null;
   if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 });
 modal.addEventListener("cancel", (event) => {
@@ -782,7 +1168,13 @@ function reviewDetails(preview) {
 }
 
 async function bookSelected() {
-  if (state.committing || !state.selectedSlot || state.config.readOnly) return;
+  if (
+    state.committing ||
+    state.switchingUnit ||
+    !state.selectedSlot ||
+    state.config.readOnly
+  )
+    return;
   const slot = state.selectedSlot;
   const generation = state.routeGeneration;
   const selection = {
@@ -804,7 +1196,11 @@ async function bookSelected() {
     endTime: slot.endTime,
     quantity: state.quantity,
     amount: selection.expectedAmount,
-    paymentMethod: "Bank transfer / PayNow UEN",
+    unitPrice: slot.price,
+    paymentMethod:
+      selection.expectedAmount === 0
+        ? "Free — no payment required"
+        : "Bank transfer / PayNow UEN",
   };
   state.committing = true;
   state.bookingError = "";
@@ -813,18 +1209,42 @@ async function bookSelected() {
     (element) => ({ element, disabled: element.disabled }),
   );
   for (const { element } of controls) element.disabled = true;
+  let activityAttempt;
   try {
+    activityAttempt = await beginActivityAction(
+      "booking",
+      receiptBooking(receipt),
+    );
     const result = await api("/api/bookings", selection);
+    const outcome = ["payment_pending", "confirmed_free"].includes(
+      result.status,
+    )
+      ? "success"
+      : "uncertain";
+    await finishActivityAction(
+      activityAttempt,
+      outcome,
+      receiptBooking(result),
+    );
+    if (result.bookingId && outcome === "success")
+      await observeActivity(
+        activityAttempt?.scope,
+        [receiptBooking(result)],
+        result.status === "confirmed_free" ? "current" : "unpaid",
+      );
     state.committing = false;
     if (state.session && generation === state.routeGeneration)
       showResult(result);
   } catch (error) {
+    await finishActivityAction(
+      activityAttempt,
+      uncertainError(error) ? "uncertain" : "failed",
+      null,
+      error.code,
+    );
     state.committing = false;
     if (!state.session || generation !== state.routeGeneration) return;
-    if (
-      ["CONNECTION_INTERRUPTED", "INTERNAL_ERROR"].includes(error.code) ||
-      !error.code
-    ) {
+    if (uncertainError(error)) {
       showResult({
         ...receipt,
         status: "outcome_unknown",
@@ -860,7 +1280,8 @@ function bankInstructions() {
 }
 
 function showResult(result) {
-  const ok = result.status === "payment_pending";
+  const ok = ["payment_pending", "confirmed_free"].includes(result.status);
+  const free = result.amount === 0;
   openModal(
     "result",
     ok
@@ -870,9 +1291,9 @@ function showResult(result) {
       : "Booking status unconfirmed.",
     `<div class="result-icon">${icon(ok ? "calendarCheck" : "info")}</div><p class="modal-copy">${esc(state.config.demo && ok ? "This reservation exists only in the offline demonstration. No payment is needed." : result.message)}</p>${reviewDetails(result)}
     ${result.orderNo ? `<span class="result-reference">Order reference: ${esc(result.orderNo)}</span>` : ""}${result.bookingId ? `<span class="result-reference">Booking reference: ${esc(result.bookingId)}</span>` : ""}
-    ${ok && !state.config.demo ? bankInstructions() : ""}
-    ${ok ? '<p class="status-line" id="payment-status" role="status">Payment status: pending</p>' : ""}
-    <div class="modal-actions">${ok ? `<button class="button secondary" data-action="payment-status" data-value="${esc(result.previewId)}">${icon("refresh")} Check payment</button>` : ""}<button class="button" data-action="go-bookings">View my bookings ${icon("arrow")}</button></div>`,
+    ${ok && !state.config.demo && !free ? bankInstructions() : ""}
+    ${ok ? `<p class="status-line" id="payment-status" role="status">${free ? (result.status === "confirmed_free" ? "Confirmed · Free" : "No payment required. Check My bookings for confirmation.") : "Payment status: pending"}</p>` : ""}
+    <div class="modal-actions">${ok && !free ? `<button class="button secondary" data-action="payment-status" data-value="${esc(result.previewId)}">${icon("refresh")} Check payment</button>` : ""}<button class="button" data-action="go-bookings" data-tab="${result.status === "confirmed_free" ? "current" : "unpaid"}">View my bookings ${icon("arrow")}</button></div>`,
     ok ? "BOOKING SUBMITTED" : "SUBMISSION STATUS",
   );
 }
@@ -881,6 +1302,7 @@ function paymentStatusText(status) {
   return (
     {
       paid: "Payment received.",
+      free: "No payment is required for this booking.",
       expired:
         "This payment order has expired. Use Complete payment to continue the reservation.",
       not_started:
@@ -891,9 +1313,13 @@ function paymentStatusText(status) {
 }
 
 function showBookingDetails(id, payment = null) {
-  const booking = payment?.booking || state.bookings.find((b) => b.id === id);
+  const booking = payment?.booking || bookingFromView(id);
   if (!booking) return;
-  const pending = booking.tab === "unpaid" && payment?.status !== "paid";
+  state.bookingDetail = { booking, scope: activityScope() };
+  const pending =
+    booking.tab === "unpaid" && !["paid", "free"].includes(payment?.status);
+  const canCancel =
+    payment?.canCancel ?? (pending || futureFreeTennis(booking));
   const orderNo =
     payment?.orderNo || booking.orderNo || booking.receipt?.orderNo;
   const instructions =
@@ -909,38 +1335,59 @@ function showBookingDetails(id, payment = null) {
     booking.facilityName,
     `<p class="modal-copy">${esc(dateFormat(booking.startTime.slice(0, 10), { weekday: "long", month: "long", year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p>${ownBookingMetadata({ ...booking, orderNo })}
     ${booking.tab === "unpaid" || payment ? `<p class="status-line" id="payment-status" role="status">${esc(paymentStatusText(payment?.status))}</p>` : ""}${instructions}
-    <div class="modal-actions reservation-actions">${pending ? `<button class="button" data-action="complete-payment" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>Complete payment</button>` : ""}
+    ${booking.tab === "current" && freeBooking(booking) && !payment ? '<p class="status-line">Confirmed · Free</p>' : ""}
+    <div class="modal-actions reservation-actions">${booking.tab === "current" ? `<button class="button" data-action="booking-qr" data-value="${esc(id)}">${icon("qr")} Show entry QR</button>` : ""}${pending ? `<button class="button" data-action="complete-payment" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>${freeBooking(booking) ? "Check confirmation" : "Complete payment"}</button>` : ""}
     ${booking.tab === "unpaid" || payment ? `<button class="button secondary" data-action="payment-status" data-booking="${esc(id)}">${icon("refresh")} Check payment</button>` : ""}
-    ${pending ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>Cancel reservation</button>` : ""}
+    ${canCancel ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>Cancel reservation</button>` : ""}
     <button class="button secondary" data-action="close-modal">Close</button></div>`,
     "YOUR BOOKING",
   );
 }
 
 function confirmCancellation(id) {
-  const booking = state.bookings.find((b) => b.id === id);
-  if (!booking || booking.tab !== "unpaid" || state.config.readOnly) return;
+  const booking = bookingFromView(id);
+  if (
+    !booking ||
+    (booking.tab !== "unpaid" && !futureFreeTennis(booking)) ||
+    state.config.readOnly
+  )
+    return;
   openModal(
     "cancel-booking",
     "Cancel this reservation?",
     `<p class="modal-copy">${esc(booking.facilityName)} · ${esc(dateFormat(booking.startTime.slice(0, 10), { weekday: "long", month: "long", year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p><p>Your time slot will be released when the estate confirms cancellation.</p><span class="result-reference">Booking reference: ${esc(id)}</span><div class="form-error" id="reservation-error" role="alert"></div><div class="modal-actions"><button class="button secondary" data-action="booking-details" data-value="${esc(id)}">Keep reservation</button><button class="button" data-action="confirm-cancel-booking" data-value="${esc(id)}">Confirm cancellation</button></div>`,
-    "PENDING RESERVATION",
+    freeBooking(booking) && booking.tab === "current"
+      ? "FREE TENNIS BOOKING"
+      : "PENDING RESERVATION",
   );
 }
 
 async function mutateReservation(id, action) {
-  if (state.committing || state.config.readOnly) return;
+  if (state.committing || state.switchingUnit || state.config.readOnly) return;
   const generation = state.routeGeneration;
+  const bookingForLog = bookingFromView(id);
+  let activityAttempt;
+  stopBookingQr();
   state.committing = true;
   const controls = [...document.querySelectorAll("button, input, select")].map(
     (element) => ({ element, disabled: element.disabled }),
   );
   for (const { element } of controls) element.disabled = true;
   try {
+    if (action === "cancel")
+      activityAttempt = await beginActivityAction(
+        "cancellation",
+        bookingForLog,
+      );
     const result = await api(
       `/api/bookings/${encodeURIComponent(id)}/${action}`,
       { confirm: true },
     );
+    if (action === "cancel")
+      await finishActivityAction(
+        activityAttempt,
+        result.status === "cancelled" ? "success" : "uncertain",
+      );
     state.committing = false;
     if (!state.session || generation !== state.routeGeneration) return;
     if (action === "cancel") {
@@ -949,16 +1396,24 @@ async function mutateReservation(id, action) {
       toast("Reservation cancelled.");
     } else {
       showBookingDetails(id, result);
-      if (result.status === "paid") {
+      if (
+        ["paid", "free"].includes(result.status) &&
+        result.booking?.tab === "current"
+      ) {
         state.bookings = state.bookings.filter((booking) => booking.id !== id);
         renderBookings();
       }
     }
   } catch (error) {
+    if (action === "cancel")
+      await finishActivityAction(
+        activityAttempt,
+        uncertainError(error) ? "uncertain" : "failed",
+        null,
+        error.code,
+      );
     if (!state.session || generation !== state.routeGeneration) return;
-    const message = ["CONNECTION_INTERRUPTED", "INTERNAL_ERROR"].includes(
-      error.code,
-    )
+    const message = uncertainError(error)
       ? "The result could not be confirmed. Refresh My bookings before trying again."
       : error.message;
     const target =
@@ -1049,21 +1504,42 @@ document.addEventListener("change", async (event) => {
   const target = event.target;
   if (target.id === "unit-select") {
     if (!state.session) return;
-    if (state.committing) {
+    if (state.committing || state.switchingUnit) {
       target.value = state.session.unit.unitId;
       return;
     }
+    state.switchingUnit = true;
+    state.routeGeneration++;
+    state.availabilityGeneration++;
+    stopEntry();
+    document.querySelector("#entry-qr")?.replaceChildren();
+    stopBookingQr();
+    state.activity = null;
+    state.bookingDetail = null;
+    state.bookings = [];
+    state.activityStorageError = "";
     target.disabled = true;
     try {
       state.session = await api("/api/unit", { unitId: target.value });
-      const destination = entryRoute() ? "#/qr" : "#/facilities";
+      state.switchingUnit = false;
+      const destination = entryRoute()
+        ? "#/qr"
+        : location.hash.startsWith("#/activity")
+          ? "#/activity"
+          : "#/facilities";
       if (location.hash !== destination) location.hash = destination;
       else await route();
     } catch (error) {
+      state.switchingUnit = false;
       toast(error.message, true);
       target.value = state.session?.unit?.unitId || "";
       target.disabled = false;
+      if (state.session) await route();
     }
+  } else if (target.id === "activity-month") {
+    if (!/^\d{4}-(?:0[1-9]|1[0-2])$/.test(target.value)) return;
+    state.activityMonth = target.value;
+    renderActivity();
   } else if (target.id === "booking-date") {
     if (!target.value || !target.checkValidity()) return;
     const offset =
@@ -1082,6 +1558,13 @@ document.addEventListener("change", async (event) => {
 });
 
 document.addEventListener("click", async (event) => {
+  if (state.switchingUnit) {
+    if (event.target.closest('a[href^="#"], [data-action]')) {
+      event.preventDefault();
+      toast("Please wait while your unit changes.");
+    }
+    return;
+  }
   if (state.committing && event.target.closest('a[href^="#"]')) {
     event.preventDefault();
     toast("Please wait for your booking submission to finish.");
@@ -1108,11 +1591,15 @@ document.addEventListener("click", async (event) => {
       );
     } else if (action === "logout") {
       button.disabled = true;
+      stopBookingQr();
       await forgetEntry();
       await api("/api/logout", {});
       state.session = null;
       state.facilities = [];
       state.bookings = [];
+      state.bookingDetail = null;
+      state.activity = null;
+      state.activityStorageError = "";
       state.routeGeneration++;
       closeModal();
       history.replaceState(null, "", location.pathname + location.search);
@@ -1138,7 +1625,28 @@ document.addEventListener("click", async (event) => {
       if (location.hash !== "#/qr") location.hash = "#/qr";
       else await route();
     } else if (action === "reload") await route();
-    else if (action === "explore")
+    else if (action === "export-activity") await exportActivity();
+    else if (action === "clear-activity") {
+      openModal(
+        "clear-activity",
+        "Clear this unit’s local activity?",
+        '<p class="modal-copy">This removes the activity saved in this browser for the signed-in account and selected unit. It does not cancel any estate booking. Current records can be observed again when you refresh.</p><div class="modal-actions"><button class="button secondary" data-action="close-modal">Keep log</button><button class="button" data-action="confirm-clear-activity">Clear local log</button></div>',
+        "ACTIVITY LOG",
+      );
+    } else if (action === "confirm-clear-activity") {
+      if (state.modalType !== "clear-activity") return;
+      const scope = activityScope();
+      if (!scope) return;
+      button.disabled = true;
+      const log = await activityStore.clear(scope);
+      if (!sameActivityScope(scope)) return;
+      state.activity = log;
+      state.activityStorageError = log.storageError || "";
+      state.activitySyncError = "";
+      closeModal();
+      renderActivity();
+      toast("This unit’s local activity was cleared.");
+    } else if (action === "explore")
       document
         .querySelector("#facilities-section")
         ?.scrollIntoView({ behavior: "smooth" });
@@ -1180,7 +1688,10 @@ document.addEventListener("click", async (event) => {
       await loadAvailability(state.date);
     } else if (action === "go-bookings") {
       closeModal();
-      const hash = "#/bookings/unpaid";
+      const hash =
+        button.dataset.tab === "current"
+          ? "#/bookings/current"
+          : "#/bookings/unpaid";
       if (location.hash === hash) await route();
       else location.hash = hash;
     } else if (action === "payment-status") {
@@ -1201,7 +1712,10 @@ document.addEventListener("click", async (event) => {
           return;
         if (bookingId) {
           showBookingDetails(bookingId, result);
-          if (result.status === "paid") {
+          if (
+            ["paid", "free"].includes(result.status) &&
+            result.booking?.tab === "current"
+          ) {
             state.bookings = state.bookings.filter(
               (booking) => booking.id !== bookingId,
             );
@@ -1212,13 +1726,21 @@ document.addEventListener("click", async (event) => {
         const status = document.querySelector("#payment-status");
         if (status)
           status.textContent =
-            result.status === "paid"
-              ? "Payment received."
-              : result.status === "expired"
-                ? "This payment order has expired. Please check your reservation in the estate app."
-                : "Payment is still pending confirmation from the estate.";
+            result.status === "free"
+              ? "No payment required. Check My bookings for confirmation."
+              : result.status === "paid"
+                ? "Payment received."
+                : result.status === "expired"
+                  ? "This payment order has expired. Please check your reservation in the estate app."
+                  : "Payment is still pending confirmation from the estate.";
       } finally {
         button.disabled = false;
+      }
+    } else if (action === "booking-qr") showBookingQr(button.dataset.value);
+    else if (action === "refresh-booking-qr") {
+      if (activeBookingQr) {
+        activeBookingQr.terminal = false;
+        await refreshBookingQr(activeBookingQr);
       }
     } else if (action === "booking-details")
       showBookingDetails(button.dataset.value);
@@ -1239,6 +1761,17 @@ document.addEventListener(
   (event) => {
     if (
       event.target instanceof HTMLImageElement &&
+      event.target.hasAttribute("data-booking-qr")
+    ) {
+      document.querySelector("#booking-qr-images")?.replaceChildren();
+      const status = document.querySelector("#booking-qr-status");
+      if (status)
+        status.textContent =
+          "This entry image could not be displayed. Refresh the code to try again.";
+      return;
+    }
+    if (
+      event.target instanceof HTMLImageElement &&
       !event.target.src.split("?")[0].endsWith("/assets/estate.jpg")
     )
       event.target.src = assetUrl("/assets/estate.jpg");
@@ -1248,7 +1781,7 @@ document.addEventListener(
 
 let lastHash = location.hash;
 window.addEventListener("hashchange", () => {
-  if (state.committing) {
+  if (state.committing || state.switchingUnit) {
     history.replaceState(null, "", lastHash || "#/facilities");
     return;
   }
@@ -1264,24 +1797,56 @@ window.addEventListener("beforeunload", (event) => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    stopBookingQr({ retain: true });
     stopEntry();
     document.querySelector("#entry-qr")?.replaceChildren();
     return;
   }
+  if (state.modalType === "booking-qr" && activeBookingQr) {
+    activeBookingQr.terminal = false;
+    void refreshBookingQr(activeBookingQr);
+    return;
+  }
   // Returning from another app must not discard an open dialog.
-  if (state.committing || modal.open) return;
+  if (state.committing || state.switchingUnit || modal.open) return;
   if (state.session || savedPassReady()) {
     if (location.hash !== "#/qr") location.hash = "#/qr";
     else void route();
   } else if (entryRoute()) void route();
 });
 
+window.addEventListener("sesame-session-ended", () => {
+  if (!state.session) return;
+  stopEntry();
+  stopBookingQr();
+  state.session = null;
+  state.savedPass = null;
+  state.bookings = [];
+  state.bookingDetail = null;
+  state.activity = null;
+  state.facilities = [];
+  state.detail = null;
+  state.slots = [];
+  state.committing = false;
+  state.switchingUnit = false;
+  state.routeGeneration++;
+  state.availabilityGeneration++;
+  resetSelection();
+  closeModal();
+  renderLogin(
+    "Your saved sign-in was cleared or changed in another tab. Reopen Sesame to use the current login, or sign in here.",
+  );
+});
+
 if (pageRequest)
   window.addEventListener("pagehide", () => {
     stopEntry();
+    stopBookingQr();
     state.savedPass = null;
     state.session = null;
     state.bookings = [];
+    state.bookingDetail = null;
+    state.activity = null;
     state.facilities = [];
     state.detail = null;
     state.slots = [];
@@ -1296,6 +1861,10 @@ async function start() {
     app.innerHTML = `<main class="boot-screen" id="main-content"><span class="brand-mark">G</span><h1 class="serif">The portal isn’t available yet.</h1><p>${esc(error.message)}</p><p>Start the local server, then refresh this page.</p></main>`;
     return;
   }
+  activityStore = createActivityStore({
+    ...(state.config.demo ? { indexedDB: null } : {}),
+    now: () => Date.now(),
+  });
   if (!state.config.demo) {
     try {
       state.savedPass = await passStore.load();

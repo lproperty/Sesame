@@ -1,4 +1,9 @@
-import { createDemoUpstream } from "../lib/demo.mjs";
+import {
+  createDemoUpstream,
+  demoBookingQr,
+  demoBookingTab,
+  demoCanCancelBooking,
+} from "../lib/demo.mjs";
 import { AppError } from "../lib/errors.mjs";
 import {
   bookingWindow,
@@ -15,7 +20,8 @@ import {
 export function createDemoRequest({ now = Date.now } = {}) {
   const seed = createDemoUpstream({ now });
   const units = seed.units.map(normalizeUnit);
-  const bookings = [];
+  const bookings = seed.bookings;
+  const orders = seed.orders;
   const reviews = new Map();
   let unit = units[0];
   let signedIn = false;
@@ -100,7 +106,10 @@ export function createDemoRequest({ now = Date.now } = {}) {
       quantity: 1,
       unitPrice: slot.price,
       amount: slot.price,
-      paymentMethod: "Simulated payment — no money is collected",
+      paymentMethod:
+        slot.price === 0
+          ? "No payment required"
+          : "Simulated payment — no money is collected",
       expiresAt: new Date(now() + QUOTE_TTL_MS).toISOString(),
     };
     reviews.set(preview.previewId, { preview, slotId: slot.id, result: null });
@@ -135,13 +144,16 @@ export function createDemoRequest({ now = Date.now } = {}) {
         "SLOT_UNAVAILABLE",
       );
     const bookingId = "demo-booking-" + crypto.randomUUID();
-    const orderNo = "DEMO-" + String(bookings.length + 1).padStart(5, "0");
+    const orderNo = "DEMO-" + String(orders.size + 1).padStart(5, "0");
+    const free = preview.amount === 0;
     review.result = {
       ...preview,
       bookingId,
       orderNo,
-      status: "payment_pending",
-      message: "Simulated booking only. No payment is needed.",
+      status: free ? "confirmed_free" : "payment_pending",
+      message: free
+        ? "Your free demo booking is confirmed. No payment is needed."
+        : "Simulated booking only. No payment is needed.",
     };
     bookings.push({
       id: bookingId,
@@ -149,18 +161,39 @@ export function createDemoRequest({ now = Date.now } = {}) {
       facilityName: preview.facility.name,
       facilityDetailId: review.slotId,
       unitId: unit.unitId,
+      projectId: unit.projectId,
       bookingNum: 1,
       startTime: `${preview.date} ${preview.startTime}:00`,
       endTime: `${preview.date} ${preview.endTime}:00`,
       paidTotal: preview.amount / 100,
       pricing: preview.unitPrice / 100,
-      status: 0,
+      status: free ? 1 : 0,
       orderNo,
       gmtCreate: new Date(now()).toISOString(),
+      gmtModified: new Date(now()).toISOString(),
       receipt: review.result,
+    });
+    orders.set(orderNo, {
+      requestNo: orderNo,
+      makeId: bookingId,
+      unitId: unit.unitId,
+      projectId: unit.projectId,
+      orderType: 0,
+      status: free ? 2 : 1,
+      price: preview.unitPrice,
+      quantity: 1,
+      transAmount: preview.amount,
+      tipsAmount: 0,
+      gmtCreate: new Date(now()).toISOString(),
+      gmtModified: new Date(now()).toISOString(),
     });
     return review.result;
   };
+  const bookingView = (booking) => ({
+    ...normalizeBooking(booking, demoBookingTab(booking, now())),
+    unit: { ...unit },
+    receipt: booking.receipt,
+  });
   const handle = (path, init) => {
     const url = new URL(path, "https://demo.invalid");
     if (
@@ -211,6 +244,7 @@ export function createDemoRequest({ now = Date.now } = {}) {
       signedIn = false;
       reviews.clear();
       bookings.length = 0;
+      orders.clear();
       unit = units[0];
       return { signedOut: true };
     }
@@ -257,15 +291,29 @@ export function createDemoRequest({ now = Date.now } = {}) {
     if (route === "POST /api/bookings/preview") return reviewBooking(body);
     if (route === "POST /api/bookings/commit") return commitBooking(body);
     const reservation =
-      /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel)$/.exec(
+      /^\/api\/bookings\/([a-zA-Z0-9_-]+)\/(payment|cancel|qr)$/.exec(
         url.pathname,
       );
-    if (reservation && (method === "POST" || reservation[2] === "payment")) {
+    if (
+      reservation &&
+      ((method === "GET" && ["payment", "qr"].includes(reservation[2])) ||
+        (method === "POST" && ["payment", "cancel"].includes(reservation[2])))
+    ) {
       const booking = bookings.find(
         (b) => b.id === reservation[1] && b.unitId === unit.unitId,
       );
       if (!booking)
         throw new AppError("Demo booking not found.", 404, "BOOKING_NOT_FOUND");
+      if (reservation[2] === "qr")
+        return {
+          booking: bookingView(booking),
+          images: demoBookingQr(booking, unit.unitId, now()).map((src) => ({
+            src,
+            label: "Demo facility QR — not valid for entry",
+          })),
+          refreshMs: 10_000,
+          updatedAt: now(),
+        };
       if (method === "POST" && body.confirm !== true)
         throw new AppError(
           "Confirm this reservation action.",
@@ -273,30 +321,46 @@ export function createDemoRequest({ now = Date.now } = {}) {
           "CONFIRMATION_REQUIRED",
         );
       if (reservation[2] === "cancel") {
+        if (!demoCanCancelBooking(booking, orders.get(booking.orderNo), now()))
+          throw new AppError(
+            "Only pending reservations and future confirmed free tennis bookings can be cancelled in this demo.",
+            409,
+            "BOOKING_NOT_PENDING",
+          );
         bookings.splice(bookings.indexOf(booking), 1);
+        const order = orders.get(booking.orderNo);
+        if (order && Number(order.status) !== 2) order.status = 4;
         for (const [id, review] of reviews)
           if (review.result?.bookingId === booking.id) reviews.delete(id);
         return { status: "cancelled", bookingId: booking.id };
       }
       return {
-        booking: { ...normalizeBooking(booking, "unpaid"), unit: { ...unit } },
+        booking: bookingView(booking),
         orderNo: booking.orderNo,
-        status: "pending",
+        status:
+          demoBookingTab(booking, now()) === "history"
+            ? "expired"
+            : Number(orders.get(booking.orderNo)?.status) === 2
+              ? booking.paidTotal === 0
+                ? "free"
+                : "paid"
+              : "pending",
+        canCancel: demoCanCancelBooking(
+          booking,
+          orders.get(booking.orderNo),
+          now(),
+        ),
       };
     }
     if (route === "GET /api/bookings") {
       const tab = url.searchParams.get("tab") || "current";
       if (!["current", "history", "unpaid"].includes(tab))
         throw new AppError("Unknown booking list.");
-      return tab === "unpaid"
-        ? bookings
-            .filter((b) => b.unitId === unit.unitId)
-            .map((b) => ({
-              ...normalizeBooking(b, tab),
-              unit: { ...unit },
-              receipt: b.receipt,
-            }))
-        : [];
+      return bookings
+        .filter(
+          (b) => b.unitId === unit.unitId && demoBookingTab(b, now()) === tab,
+        )
+        .map(bookingView);
     }
     const paymentMatch = /^\/api\/payments\/([a-zA-Z0-9_-]+)$/.exec(
       url.pathname,
@@ -305,7 +369,9 @@ export function createDemoRequest({ now = Date.now } = {}) {
       const review = reviews.get(paymentMatch[1]);
       if (!review?.result || review.preview.unit.unitId !== unit.unitId)
         throw new AppError("Demo booking not found.", 404);
-      return { status: "pending" };
+      return {
+        status: review.result.status === "confirmed_free" ? "free" : "pending",
+      };
     }
     throw new AppError(
       "This action is unavailable in the demonstration.",

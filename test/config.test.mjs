@@ -32,7 +32,7 @@ test("deployment origin cannot inject CSP directives, redirect credentials or pe
   assert.equal(JSON.stringify(clean).includes("do-not-publish"), false);
 });
 
-test("configured build keeps the source neutral and constrains requests and images to the same deployment origin", async (t) => {
+test("configured build keeps the source neutral and scopes network access while allowing booking PNG images", async (t) => {
   const sourcePath = new URL("../lib/deployment.mjs", import.meta.url);
   const source = await readFile(sourcePath, "utf8");
   const local = fileURLToPath(new URL("../.local/", import.meta.url));
@@ -43,7 +43,8 @@ test("configured build keeps the source neutral and constrains requests and imag
   await buildPages(output, config);
   const html = await readFile(join(output, "index.html"), "utf8");
   assert.ok(html.includes("connect-src " + config.apiOrigin));
-  assert.ok(html.includes("img-src 'self' " + config.apiOrigin));
+  assert.ok(html.includes("img-src 'self' data: " + config.apiOrigin));
+  assert.equal(/(?:script-src|connect-src)[^;\"]*data:/.test(html), false);
   const built = await import(
     pathToFileURL(join(output, "lib/upstream.mjs")).href
   );

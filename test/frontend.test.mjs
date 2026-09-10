@@ -11,13 +11,18 @@ import {
   ROUTES,
 } from "../lib/upstream.mjs";
 import { createDemoRequest } from "../pages/runtime.mjs";
-import { createLiveRequest } from "../pages/live.mjs";
+import { createLiveRequest, SESSION_STORAGE_KEY } from "../pages/live.mjs";
 import {
   entryPassFromSession,
   createEntryQr,
   ENTRY_REFRESH_MS,
 } from "../public/entry-pass.js";
 import { createPassStore } from "../public/pass-store.js";
+import {
+  createActivityStore,
+  activityScopeFromSession,
+  summarizeActivity,
+} from "../public/activity-store.js";
 import { IDBFactory } from "fake-indexeddb";
 import { createPaymentQr } from "../public/payment-qr.js";
 
@@ -32,7 +37,7 @@ const sourceModule = await readFile(
 // jsdom evaluates the DOM controller outside its module loader. Bind the real
 // imported helpers below; the production module graph is verified separately.
 const source = sourceModule.replace(
-  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store|payment-qr)\.js["'];\s*/gm,
+  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store|payment-qr|activity-store)\.js["'];\s*/gm,
   "",
 );
 
@@ -73,6 +78,16 @@ async function fixture(t, options = {}) {
   window.entryPassFromSession = entryPassFromSession;
   window.createEntryQr = createEntryQr;
   window.createPaymentQr = createPaymentQr;
+  window.activityScopeFromSession = activityScopeFromSession;
+  window.summarizeActivity = summarizeActivity;
+  const activityDatabase = options.activityDatabase || new IDBFactory();
+  window.createActivityStore = (settings = {}) =>
+    createActivityStore({
+      ...settings,
+      indexedDB: settings.indexedDB === null ? null : activityDatabase,
+      crypto: globalThis.crypto,
+      now,
+    });
   window.ENTRY_REFRESH_MS = ENTRY_REFRESH_MS;
   const passDatabase = options.passDatabase || new IDBFactory();
   window.createPassStore = () =>
@@ -120,10 +135,13 @@ async function fixture(t, options = {}) {
   };
   if (options.staticDemo) window.sesameRequest = createDemoRequest({ now });
   const estateRequests = [];
+  let browserClient = null;
   if (options.browserLive)
-    window.sesameRequest = createLiveRequest({
+    window.sesameRequest = browserClient = createLiveRequest({
       now,
-      storage: options.browserStorage ?? window.sessionStorage,
+      storage: options.browserStorage ?? window.localStorage,
+      legacyStorage: window.sessionStorage,
+      eventTarget: window,
       payment: {
         payee: "Example estate",
         uen: "EXAMPLE-UEN",
@@ -162,6 +180,13 @@ async function fixture(t, options = {}) {
         }
       },
     });
+  // Tests can hold an already-completed facade response to reproduce the gap
+  // between an estate session change and the controller receiving that result.
+  if (options.decorateRequest) {
+    if (window.sesameRequest)
+      window.sesameRequest = options.decorateRequest(window.sesameRequest);
+    else window.fetch = options.decorateRequest(window.fetch);
+  }
   window.eval(source);
   const query = (selector) => window.document.querySelector(selector);
   const all = (selector) => [...window.document.querySelectorAll(selector)];
@@ -245,7 +270,15 @@ async function fixture(t, options = {}) {
     consoleErrors,
     networkAttempts,
     estateRequests,
+    browserClient,
     passDatabase,
+    activityDatabase,
+    readActivity: (unitId = "demo-unit-1") =>
+      createActivityStore({
+        indexedDB: activityDatabase,
+        crypto: globalThis.crypto,
+        now,
+      }).load({ ownerId: "demo-owner", projectId: "demo-project", unitId }),
     readSavedPass: () =>
       createPassStore({
         indexedDB: passDatabase,
@@ -360,6 +393,515 @@ test("paid reservation status removes payment and cancellation controls and refr
   assert.equal(f.query('[data-action="cancel-booking"]'), null);
   assert.equal(f.all(".booking-row").length, 0);
   assert.deepEqual(f.consoleErrors, []);
+});
+
+async function bookFreeTennis(f) {
+  f.query('.facility-card[href="#/facility/demo-facility-6"]').click();
+  await f.until(
+    () => f.query("#booking-date") && f.all(".slot").length,
+    "off-peak slots",
+  );
+  f.query("#booking-date").value = "2026-09-06";
+  f.change(f.query("#booking-date"));
+  await f.until(
+    () => f.all(".slot:not(:disabled)").length === 11,
+    "free tomorrow slots",
+  );
+  f.query(".slot:not(:disabled)").click();
+  f.query("#book-submit").click();
+  await f.until(
+    () => /Confirmed · Free/.test(f.query("#modal")?.textContent),
+    "free confirmation",
+  );
+  assert.equal(f.query(".bank-details"), null);
+  assert.equal(f.query('[data-action="complete-payment"]'), null);
+  f.query('[data-action="go-bookings"]').click();
+  await f.until(
+    () => f.query('.booking-row [data-action="booking-qr"]'),
+    "confirmed booking entry action",
+  );
+}
+
+for (const browserLive of [false, true]) {
+  test(`free tennis has an estate QR and cancellation log in ${browserLive ? "Pages" : "local"} UI`, async (t) => {
+    const f = await fixture(t, { browserLive });
+    await f.login();
+    await bookFreeTennis(f);
+    assert.match(f.query(".booking-row").textContent, /Confirmed · Free/);
+    f.query('.booking-row [data-action="booking-qr"]').click();
+    await f.until(
+      () => f.query("#booking-qr-images img"),
+      "estate-issued booking image",
+    );
+    assert.match(
+      f.query("#booking-qr-images img").getAttribute("src"),
+      /^data:image\/png;base64,/,
+    );
+    assert.equal(f.calls.filter((op) => op === "bookingQr").length, 1);
+    assert.match(
+      f.query("#booking-qr-status").textContent,
+      /refreshes every 10 seconds/,
+    );
+    Object.defineProperty(f.window.document, "hidden", {
+      configurable: true,
+      value: true,
+    });
+    f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+    assert.equal(
+      f.query("#booking-qr-images img"),
+      null,
+      "codes are removed while backgrounded",
+    );
+    Object.defineProperty(f.window.document, "hidden", {
+      configurable: true,
+      value: false,
+    });
+    f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+    await f.until(
+      () => f.query("#booking-qr-images img"),
+      "fresh code after returning",
+    );
+    assert.equal(f.calls.filter((op) => op === "bookingQr").length, 2);
+    f.query('#modal [data-action="booking-details"]').click();
+    assert.equal(f.query("#booking-qr-images img"), null);
+    assert.ok(f.query('#modal [data-action="cancel-booking"]'));
+    f.query('#modal [data-action="cancel-booking"]').click();
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    await f.until(
+      () => !f.query("#modal").open && f.query(".empty-state"),
+      "confirmed cancellation",
+    );
+    assert.equal(f.writes().filter((op) => op === "cancelBooking").length, 1);
+    assert.equal(f.demo.bookings.length, 0);
+    assert.equal(
+      [...f.demo.orders.values()][0].status,
+      2,
+      "zero order stays settled without keeping a booking active",
+    );
+    f.window.location.hash = "#/activity";
+    await f.until(() => f.query(".activity-metrics"), "activity view");
+    assert.match(
+      f.query("#main-content").textContent,
+      /Cancellation confirmed/,
+    );
+    assert.match(f.query("#main-content").textContent, /Cancelled in Sesame/);
+    assert.match(
+      f.query("#main-content").textContent,
+      /has not provided a remaining-quota balance/,
+    );
+    if (browserLive) {
+      const log = await f.readActivity();
+      assert.equal(log.persistent, true);
+      assert.deepEqual(
+        log.events.map((event) => [event.action, event.outcome]),
+        [
+          ["booking", "success"],
+          ["cancellation", "success"],
+        ],
+      );
+      assert.doesNotMatch(
+        JSON.stringify(log),
+        /local-demo-token|data:image|codeUrl|csrfToken/,
+      );
+      f.query("#unit-select").value = "demo-unit-2";
+      f.change(f.query("#unit-select"));
+      await f.until(
+        () =>
+          f.query(".activity-metrics") &&
+          !/Cancellation confirmed/.test(f.query("#main-content").textContent),
+        "other unit isolated activity",
+      );
+      assert.equal((await f.readActivity("demo-unit-2")).events.length, 0);
+      assert.equal((await f.readActivity()).events.length, 2);
+    }
+    assert.deepEqual(f.consoleErrors, []);
+  });
+}
+
+test("closing a booking QR discards its late response and does not save access credentials", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  let completed = false;
+  const f = await fixture(t, {
+    browserLive: true,
+    override: async (op, body, context, demo) => {
+      if (op === "bookingQr") {
+        await gate;
+        const value = await demo(op, body, context);
+        completed = true;
+        return value;
+      }
+    },
+  });
+  await f.login();
+  await bookFreeTennis(f);
+  f.query('.booking-row [data-action="booking-qr"]').click();
+  await f.until(() => f.calls.includes("bookingQr"), "QR request started");
+  f.query('#modal [data-action="close-modal"]').click();
+  release();
+  await f.until(() => completed, "late QR request completes");
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(f.query("#modal").open, false);
+  assert.equal(f.query("#booking-qr-images img"), null);
+  assert.doesNotMatch(
+    JSON.stringify(await f.readActivity()),
+    /data:image|codeUrl|local-demo-token/,
+  );
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("a delayed booking QR 401 cannot sign out a newer owner session", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let loginCount = 0;
+  let responseReleased = false;
+  const f = await fixture(t, {
+    override: async (operation, body, context, demo) => {
+      if (operation === "login") {
+        const result = await demo(operation, body, context);
+        if (++loginCount > 1) {
+          result.ownerLoginOutDTO.id = "second-demo-owner";
+          result.ownerLoginOutDTO.username = "Second owner";
+        }
+        return result;
+      }
+      if (operation === "bookingQr") {
+        await gate;
+        responseReleased = true;
+        throw new AppError(
+          "The earlier session expired.",
+          401,
+          "SESSION_EXPIRED",
+        );
+      }
+    },
+  });
+  await f.login();
+  await bookFreeTennis(f);
+  f.query('.booking-row [data-action="booking-qr"]').click();
+  await f.until(() => f.calls.includes("bookingQr"), "old QR request started");
+  f.query('#modal [data-action="close-modal"]').click();
+  f.query('.mobile-nav [data-action="logout"]').click();
+  await f.until(() => f.query("#login-form"), "first owner signed out");
+  await f.login();
+  assert.equal(f.query(".account-name").textContent, "Second owner");
+  release();
+  await f.until(() => responseReleased, "old QR authentication error released");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(f.query("#login-form"), null);
+  assert.equal(f.query(".account-name").textContent, "Second owner");
+  assert.equal(f.query("#modal").open, false);
+  assert.equal(f.query("#booking-qr-images img"), null);
+  // The new authentication still supports a fresh protected read.
+  f.query('.mobile-nav a[href="#/bookings"]').click();
+  await f.until(() => f.query(".booking-tabs"), "new owner can load bookings");
+  assert.equal(f.query(".account-name").textContent, "Second owner");
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("activity reads and navigation wait for an in-flight unit change without mixing unit logs", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  t.after(() => release());
+  let switchedUpstream = false;
+  const f = await fixture(t, {
+    browserLive: true,
+    decorateRequest: (request) => async (path, init) => {
+      const response = await request(path, init);
+      if (path === "/api/unit") {
+        assert.equal(response.status, 200);
+        switchedUpstream = true;
+        await gate;
+      }
+      return response;
+    },
+  });
+  for (const number of [1, 2])
+    f.demo.bookings.push({
+      id: `unit-${number}-booking`,
+      facilityId: "demo-facility-6",
+      facilityDetailId: `demo-facility-6-2026-09-06-${number - 1}`,
+      facilityName: `Unit ${number} tennis`,
+      unitId: `demo-unit-${number}`,
+      projectId: "demo-project",
+      startTime: "2026.09.06 08:00",
+      endTime: "2026.09.06 09:00",
+      bookingNum: 1,
+      pricing: 0,
+      paidTotal: 0,
+      status: 1,
+    });
+  await f.login();
+  f.window.location.hash = "#/activity";
+  await f.until(() => f.query(".activity-metrics"), "first unit activity");
+  assert.deepEqual(
+    (await f.readActivity()).observations.map((booking) => booking.id),
+    ["unit-1-booking"],
+  );
+  f.query("#unit-select").value = "demo-unit-2";
+  f.change(f.query("#unit-select"));
+  await f.until(
+    () => switchedUpstream,
+    "estate unit changed before its response arrives",
+  );
+  const readsBefore = f.calls.filter(
+    (operation) => operation === "bookings",
+  ).length;
+  f.query('[data-action="reload"]').click();
+  f.query('.mobile-nav a[href="#/facilities"]').click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(
+    f.calls.filter((operation) => operation === "bookings").length,
+    readsBefore,
+  );
+  assert.equal(f.window.location.hash, "#/activity");
+  assert.match(f.query("#toasts").textContent, /wait while your unit changes/);
+  assert.deepEqual(
+    (await f.readActivity()).observations.map((booking) => booking.id),
+    ["unit-1-booking"],
+  );
+  assert.deepEqual((await f.readActivity("demo-unit-2")).observations, []);
+  release();
+  await f.until(
+    () =>
+      f.query(".activity-metrics") &&
+      /unit-2-booking/.test(f.query("#main-content").textContent),
+    "second unit records after the switch completes",
+  );
+  assert.deepEqual(
+    (await f.readActivity()).observations.map((booking) => booking.id),
+    ["unit-1-booking"],
+  );
+  assert.deepEqual(
+    (await f.readActivity("demo-unit-2")).observations.map(
+      (booking) => booking.id,
+    ),
+    ["unit-2-booking"],
+  );
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("a session change after the estate accepts a booking is logged as uncertain", async (t) => {
+  let f;
+  f = await fixture(t, {
+    browserLive: true,
+    override: async (operation, body, context, demo) => {
+      if (operation === "createOrder") {
+        const result = await demo(operation, body, context);
+        // The real Pages facade can change its session epoch during pagehide,
+        // after the estate has already accepted the reservation and order.
+        f.browserClient.suspend();
+        return result;
+      }
+    },
+  });
+  await f.login();
+  await f.chooseSlot();
+  f.query("#book-submit").click();
+  await f.until(
+    () => /Booking status unconfirmed/.test(f.query("#modal").textContent),
+    "session-change result remains unconfirmed",
+  );
+  assert.equal(f.demo.bookings.length, 1);
+  assert.equal(f.demo.orders.size, 1);
+  assert.match(
+    f.query("#modal").textContent,
+    /Check My bookings.*before trying again/,
+  );
+  const log = await f.readActivity();
+  assert.equal(log.events.length, 1);
+  assert.equal(log.events[0].action, "booking");
+  assert.equal(log.events[0].outcome, "uncertain");
+  assert.equal(log.events[0].errorCode, "SESSION_CHANGED");
+  assert.equal(log.events[0].resolvedAt, null);
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("a pending booking that becomes confirmed keeps working QR and cancellation actions", async (t) => {
+  for (const action of ["payment-status", "complete-payment"]) {
+    const f = await fixture(t, { browserLive: true });
+    const booking = {
+      id: `confirmed-after-${action}`,
+      facilityId: "demo-facility-6",
+      facilityDetailId: "demo-facility-6-2026-09-06-0",
+      facilityName: "Tennis Court (Off-Peak)",
+      unitId: "demo-unit-1",
+      projectId: "demo-project",
+      startTime: "2026.09.06 08:00",
+      endTime: "2026.09.06 09:00",
+      bookingNum: 1,
+      pricing: 0,
+      paidTotal: 0,
+      orderNo: "PENDING-FREE-ORDER",
+      status: 0,
+    };
+    const order = {
+      requestNo: booking.orderNo,
+      makeId: booking.id,
+      unitId: booking.unitId,
+      projectId: booking.projectId,
+      orderType: 0,
+      price: 0,
+      transAmount: 0,
+      tipsAmount: 0,
+      status: 1,
+    };
+    f.demo.bookings.push(booking);
+    f.demo.orders.set(booking.orderNo, order);
+    await f.login();
+    f.window.location.hash = "#/bookings/unpaid";
+    await f.until(() => f.query(".booking-row"), "pending free booking loaded");
+    f.query('.booking-row [data-action="booking-details"]').click();
+    booking.status = 1;
+    order.status = 2;
+    f.query(`#modal [data-action="${action}"]`).click();
+    await f.until(
+      () =>
+        f.query('#modal [data-action="booking-qr"]') &&
+        f.all(".booking-row").length === 0,
+      "confirmed booking removed from pending rows but retained in its dialog",
+    );
+    f.query('#modal [data-action="booking-qr"]').click();
+    await f.until(
+      () => f.query("#booking-qr-images img"),
+      "entry QR opens from the confirmation dialog",
+    );
+    assert.equal(
+      f.calls.filter((operation) => operation === "bookingQr").length,
+      1,
+    );
+    f.query('#modal [data-action="booking-details"]').click();
+    f.query('#modal [data-action="cancel-booking"]').click();
+    assert.match(f.query("#modal").textContent, /Cancel this reservation/);
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    await f.until(
+      () => !f.query("#modal").open && f.query(".empty-state"),
+      "cached confirmed booking cancelled",
+    );
+    assert.equal(
+      f.calls.filter((operation) => operation === "cancelBooking").length,
+      1,
+    );
+    assert.equal(f.demo.bookings.length, 0);
+    const log = await f.readActivity();
+    assert.deepEqual(
+      log.events.map((event) => [
+        event.action,
+        event.outcome,
+        event.booking.id,
+      ]),
+      [["cancellation", "success", booking.id]],
+    );
+    assert.deepEqual(f.consoleErrors, []);
+  }
+});
+
+test("activity survives a Pages reload, exports safe JSON, and clears only on confirmation", async (t) => {
+  const database = new IDBFactory();
+  const first = await fixture(t, {
+    browserLive: true,
+    activityDatabase: database,
+  });
+  await first.login();
+  await bookFreeTennis(first);
+  const storage = first.window.localStorage;
+  first.window.dispatchEvent(new first.window.Event("pagehide"));
+  const f = await fixture(t, {
+    browserLive: true,
+    activityDatabase: database,
+    browserStorage: storage,
+    initialHash: "#/bookings/current",
+    restoredSession: true,
+  });
+  f.window.location.hash = "#/activity";
+  await f.until(() => f.query(".activity-metrics"), "restored local log");
+  assert.match(f.query("#main-content").textContent, /Booking submitted/);
+  assert.equal((await f.readActivity()).events.length, 1);
+  let blob;
+  f.window.URL.createObjectURL = (value) => {
+    blob = value;
+    return "blob:https://lproperty.github.io/example";
+  };
+  f.window.URL.revokeObjectURL = () => {};
+  const originalClick = f.window.HTMLAnchorElement.prototype.click;
+  f.window.HTMLAnchorElement.prototype.click = function () {
+    if (!this.download) return originalClick.call(this);
+  };
+  f.query('[data-action="export-activity"]').click();
+  await f.until(() => Boolean(blob), "JSON export");
+  const exported = await new Promise((resolve, reject) => {
+    const reader = new f.window.FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsText(blob);
+  });
+  const data = JSON.parse(exported);
+  assert.equal(data.events.length, 1);
+  assert.doesNotMatch(
+    exported,
+    /local-demo-token|data:image|codeUrl|csrfToken/,
+  );
+  f.query('[data-action="clear-activity"]').click();
+  assert.equal(
+    (await f.readActivity()).events.length,
+    1,
+    "opening confirmation keeps records",
+  );
+  f.query('[data-action="confirm-clear-activity"]').click();
+  await f.until(
+    () =>
+      !f.query("#modal").open &&
+      /No actions recorded/.test(f.query("#main-content").textContent),
+    "explicit clear",
+  );
+  assert.equal((await f.readActivity()).events.length, 0);
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("the activity UI distinguishes a rejected booking from an uncertain order result", async (t) => {
+  for (const uncertain of [false, true]) {
+    const f = await fixture(t, {
+      browserLive: true,
+      override: async (op, body, context, demo) => {
+        if (!uncertain && op === "insertBooking")
+          throw new AppError("Monthly limit reached.", 422, "ESTATE_REJECTED");
+        if (uncertain && op === "createOrder") {
+          await demo(op, body, context);
+          throw new AppError("Response lost.", 502, "UPSTREAM_UNREACHABLE");
+        }
+      },
+    });
+    await f.login();
+    await f.chooseSlot();
+    f.query("#book-submit").click();
+    await f.until(
+      () =>
+        uncertain
+          ? /Booking status unconfirmed/.test(f.query("#modal").textContent)
+          : /Monthly limit/.test(f.query("#booking-summary").textContent),
+      "failed/uncertain result",
+    );
+    if (f.query("#modal").open)
+      f.query('#modal [data-action="close-modal"]').click();
+    f.window.location.hash = "#/activity";
+    await f.until(() => f.query(".activity-metrics"), "recorded result");
+    const log = await f.readActivity();
+    assert.equal(log.events.length, 1);
+    assert.equal(log.events[0].outcome, uncertain ? "uncertain" : "failed");
+    assert.match(
+      f.query("#main-content").textContent,
+      uncertain ? /Result unconfirmed/ : /Request failed/,
+    );
+    assert.deepEqual(f.consoleErrors, []);
+  }
 });
 
 test("a declined cancellation remains visible and can be dismissed without removing the booking", async (t) => {
@@ -587,7 +1129,14 @@ test("live Pages UI signs in and completes the real booking flow against a mocke
   await f.until(() => f.query("#login-form"), "live sign-out");
   assert.equal(f.window.location.pathname, "/Sesame/");
   assert.equal(f.window.document.cookie, "");
-  assert.equal(f.window.localStorage.length, 0);
+  assert.equal(
+    JSON.parse(f.window.localStorage.getItem(SESSION_STORAGE_KEY)).signedOut,
+    true,
+  );
+  assert.doesNotMatch(
+    f.window.localStorage.getItem(SESSION_STORAGE_KEY),
+    /local-demo-token/,
+  );
   assert.equal(f.window.sessionStorage.length, 0);
   assert.deepEqual(f.networkAttempts, []);
   assert.deepEqual(f.consoleErrors, []);
@@ -601,7 +1150,7 @@ test("refresh restores the signed-in booking screen and sign-out prevents restor
     () => first.query(".booking-tabs"),
     "pending bookings screen",
   );
-  const storage = first.window.sessionStorage;
+  const storage = first.window.localStorage;
   first.window.dispatchEvent(new first.window.Event("pagehide"));
   const refreshed = await fixture(t, {
     browserLive: true,
@@ -621,7 +1170,10 @@ test("refresh restores the signed-in booking screen and sign-out prevents restor
     () => refreshed.query("#login-form"),
     "explicit sign-out",
   );
-  assert.equal(storage.length, 0);
+  assert.equal(
+    JSON.parse(storage.getItem(SESSION_STORAGE_KEY)).signedOut,
+    true,
+  );
   const signedOut = await fixture(t, {
     browserLive: true,
     browserStorage: storage,
@@ -630,6 +1182,65 @@ test("refresh restores the signed-in booking screen and sign-out prevents restor
   assert.ok(signedOut.query("#login-form"));
   assert.deepEqual(signedOut.calls, []);
   assert.deepEqual(refreshed.consoleErrors, []);
+});
+
+test("a new app launch after weeks restores login from device storage with a fresh tab", async (t) => {
+  let clock = Date.parse("2026-09-05T08:00:00Z");
+  const now = () => clock;
+  const first = await fixture(t, { browserLive: true, now });
+  await first.login();
+  first.query("#unit-select").value = "demo-unit-2";
+  first.change(first.query("#unit-select"));
+  await first.until(
+    () =>
+      first.query("#unit-select")?.value === "demo-unit-2" &&
+      !first.query("#unit-select").disabled,
+    "unit saved",
+  );
+  const saved = first.window.localStorage;
+  first.browserClient.suspend();
+  first.window.dispatchEvent(new first.window.Event("pagehide"));
+  clock += 35 * 24 * 60 * 60_000;
+  const reopened = await fixture(t, {
+    browserLive: true,
+    now,
+    browserStorage: saved,
+    initialHash: "#/bookings/current",
+    restoredSession: true,
+  });
+  assert.equal(reopened.window.sessionStorage.length, 0);
+  assert.equal(reopened.query("#login-form"), null);
+  assert.equal(reopened.query("#unit-select").value, "demo-unit-2");
+  assert.equal(reopened.calls.includes("login"), false);
+  assert.ok(reopened.query(".booking-tabs"));
+  assert.deepEqual(reopened.consoleErrors, []);
+});
+
+test("a sign-out storage event clears another open page's protected view", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  await f.login();
+  const marker = JSON.stringify({
+    version: 2,
+    apiBase: API_BASE,
+    signedOut: true,
+  });
+  f.window.localStorage.setItem(SESSION_STORAGE_KEY, marker);
+  f.window.dispatchEvent(
+    new f.window.StorageEvent("storage", {
+      key: SESSION_STORAGE_KEY,
+      newValue: marker,
+      storageArea: f.window.localStorage,
+    }),
+  );
+  await f.until(
+    () => f.query("#login-form"),
+    "shared sign-out clears old view",
+  );
+  assert.equal(f.query(".facility-card"), null);
+  assert.equal(f.query("#entry-qr"), null);
+  assert.match(f.query("#login-error").textContent, /another tab/);
+  assert.equal(f.window.localStorage.getItem(SESSION_STORAGE_KEY), marker);
+  assert.deepEqual(f.consoleErrors, []);
 });
 
 test("entry QR is the first signed-in screen and a saved pass opens without an estate login", async (t) => {

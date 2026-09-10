@@ -158,10 +158,19 @@ test("read-only HTTP session can browse and preview but every write is refused",
   assert.equal((await f.request("/api/session")).status, 401);
 });
 
-test("expired and logged-out sessions cannot continue to read owner data", async (t) => {
+test("loopback sessions survive browser reopening and inactivity until explicit logout", async (t) => {
   let current = Date.parse("2026-09-05T08:00:00Z");
   const f = await start(t, { now: () => current });
-  current += 2 * 60 * 60_000 + 1;
+  assert.match(f.setCookie, /Max-Age=34560000/);
+  current += 35 * 24 * 60 * 60_000;
+  const kept = await f.request("/api/session");
+  assert.equal(kept.status, 200);
+  assert.equal(
+    kept.headers.get("set-cookie"),
+    null,
+    "late reads must not overwrite a newer login cookie",
+  );
+  assert.equal((await f.request("/api/facilities")).status, 200);
+  assert.equal((await f.request("/api/logout", {})).status, 200);
   assert.equal((await f.request("/api/session")).status, 401);
-  assert.equal((await f.request("/api/facilities")).status, 401);
 });
