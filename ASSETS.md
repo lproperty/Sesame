@@ -10,10 +10,10 @@ The photographs are estate assets reused from the supplied native app and facili
 | `public/assets/games.png`                                                           | Facility API's games room image                                    |
 | `public/assets/bbq.png`                                                             | Facility API's outdoor dining image                                |
 | `public/assets/music.png`                                                           | Facility API's music room image                                    |
-| `public/assets/favicon.svg`                                                         | Original minimal house symbol in a blue-and-white gradient palette |
-| `public/assets/apple-touch-icon-home.png`, `icon-home-192.png`, `icon-home-512.png` | Raster versions of the original house symbol                       |
+| `design/icon-monogram-source.png` | AI-generated production artwork based on the user-selected C monogram concept; blue-and-white folded S |
+| `public/assets/favicon-monogram-32.png`, `apple-touch-icon-monogram.png`, `icon-monogram-192.png`, `icon-monogram-512.png` | Resized opaque PNG exports of the selected monogram source |
 
-The iPhone Home Screen icon is an opaque 180 × 180 PNG; iOS applies its own corner mask. The manifest includes 192 × 192 and 512 × 512 versions. The home icon filenames let browsers fetch the new artwork independently of older cached letter icons. The design uses one rounded house silhouette and an open doorway, with no text or decorative details. The SVG retains the editable vector design. No third-party logo artwork is included in the app.
+The user selected concept C: a folded white S with pale-lavender shading on the original vivid blue theme (`#3b45fd` to `#1f2afd`). The full-resolution source is retained in `design/icon-monogram-source.png` and is not included in the Pages build. The browser favicon is 32 × 32, the iPhone Home Screen icon is 180 × 180, and the manifest includes 192 × 192 and 512 × 512 versions. All exports are opaque full-bleed squares; iOS applies its own corner mask. New monogram filenames avoid reusing cached house artwork. The original house icon assets are retired.
 
 Live facility cards use image URLs returned by the configured estate API. Demo facilities reuse category photos and use synthetic account, unit, slot and reservation identifiers. Original estate URLs and the source payment image are retained only in the private local workspace.
 
