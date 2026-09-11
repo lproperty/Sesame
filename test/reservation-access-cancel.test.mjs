@@ -30,6 +30,14 @@ function booking(changes = {}) {
   };
 }
 
+function historicalBooking(changes = {}) {
+  return booking({
+    startTime: "2026.09.10 15:00:00",
+    endTime: "2026.09.10 16:00:00",
+    ...changes,
+  });
+}
+
 function order(changes = {}) {
   return {
     requestNo: "SYNTHETIC-FREE-ORDER",
@@ -58,6 +66,7 @@ function fixture(options = {}) {
   };
   const state = {
     current: options.current ?? [booking()],
+    history: options.history ?? [],
     unpaid: options.unpaid ?? [],
     orders: options.orders ?? [order()],
   };
@@ -73,7 +82,13 @@ function fixture(options = {}) {
     );
     if (overridden !== undefined) return overridden;
     if (op === "bookings")
-      return structuredClone(body.status === 0 ? state.unpaid : state.current);
+      return structuredClone(
+        body.status === 0
+          ? state.unpaid
+          : body.type === 1
+            ? state.history
+            : state.current,
+      );
     if (op === "orders")
       return {
         list: structuredClone(state.orders),
@@ -88,6 +103,7 @@ function fixture(options = {}) {
     if (op === "cancelBooking") {
       state.current = state.current.filter((row) => row.id !== body.id);
       state.unpaid = state.unpaid.filter((row) => row.id !== body.id);
+      state.history = state.history.filter((row) => row.id !== body.id);
       return {};
     }
     if (op === "qrConfig") return { value: 10 };
@@ -148,10 +164,113 @@ test("confirmed free tennis cancels only its authenticated booking after verifyi
   const writeIndex = f.calls.findIndex((call) => call.op === "cancelBooking");
   assert.deepEqual(
     f.calls.slice(writeIndex + 1).map((call) => call.body),
-    [{ status: 1, type: 0 }, { status: 0 }],
+    [{ status: 1, type: 0 }, { status: 0 }, { status: 1, type: 1 }],
   );
   // Cancelling a reservation does not fabricate a refund or change the order.
   assert.equal(f.state.orders[0].status, 2);
+});
+
+test("historical free tennis cancellation verifies history removal and preserves other records and settled orders", async () => {
+  const f = fixture({
+    current: [booking({ id: "future-booking" })],
+    unpaid: [booking({ id: "pending-booking", status: 0 })],
+    history: [historicalBooking(), historicalBooking({ id: OTHER_BOOKING })],
+  });
+  const previousOrders = structuredClone(f.state.orders);
+  assert.deepEqual(await f.cancel(), { status: "cancelled", bookingId: BOOKING });
+  assert.equal(f.writes().length, 1);
+  assert.deepEqual(f.writes()[0].body, { id: BOOKING, projectId: PROJECT });
+  assert.equal(f.writes()[0].context.unitId, UNIT);
+  assert.deepEqual(f.state.history.map(row => row.id), [OTHER_BOOKING]);
+  assert.deepEqual(f.state.current.map(row => row.id), ["future-booking"]);
+  assert.deepEqual(f.state.unpaid.map(row => row.id), ["pending-booking"]);
+  assert.deepEqual(f.state.orders, previousOrders);
+  const writeIndex = f.calls.findIndex(call => call.op === "cancelBooking");
+  assert.deepEqual(
+    f.calls.slice(writeIndex + 1).map(call => call.body),
+    [{ status: 1, type: 0 }, { status: 0 }, { status: 1, type: 1 }],
+  );
+  assert.equal(f.calls.some(call => ["createOrder", "orderStatus", "bookingQr", "qrConfig"].includes(call.op)), false);
+});
+
+test("enabling history cancellation does not expose past bookings to entry QR or payment actions", async () => {
+  const f = fixture({ current: [], history: [historicalBooking()] });
+  await assert.rejects(f.access(), matches("BOOKING_NOT_FOUND"));
+  await assert.rejects(f.portal.bookingPayment(f.session, BOOKING), matches("BOOKING_NOT_FOUND"));
+  await assert.rejects(
+    f.portal.resumePayment(f.session, BOOKING, { confirm: true }),
+    matches("BOOKING_NOT_FOUND"),
+  );
+  assert.equal(f.calls.some(call => ["orders", "createOrder", "cancelBooking", "bookingQr", "qrConfig"].includes(call.op)), false);
+  assert.equal((await f.cancel()).status, "cancelled");
+});
+
+test("history cancellation checks free tennis eligibility, completed times and selected-unit ownership", async (t) => {
+  const cases = [
+    ["paid historical booking", { pricing: 2.18, paidTotal: 2.18 }, "BOOKING_NOT_CANCELLABLE"],
+    ["unknown total", { paidTotal: undefined }, "BOOKING_NOT_CANCELLABLE"],
+    ["different facility", { facilityName: "Function Room" }, "BOOKING_NOT_CANCELLABLE"],
+    ["ongoing session incorrectly listed in history", { startTime: "2026.09.10 20:00", endTime: "2026.09.10 22:00" }, "BOOKING_NOT_CANCELLABLE"],
+    ["missing start", { startTime: undefined }, "BOOKING_NOT_CANCELLABLE"],
+    ["missing end", { endTime: undefined }, "BOOKING_NOT_CANCELLABLE"],
+    ["end before start", { endTime: "2026.09.10 14:00" }, "BOOKING_NOT_CANCELLABLE"],
+    ["another unit", { unitId: "foreign" }, "BOOKING_NOT_FOUND"],
+    ["another project", { projectId: "foreign" }, "BOOKING_NOT_FOUND"],
+  ];
+  for (const [label, changes, code] of cases)
+    await t.test(label, async () => {
+      const f = fixture({ current: [], history: [historicalBooking(changes)] });
+      await assert.rejects(f.cancel(), matches(code));
+      assert.equal(f.writes().length, 0);
+    });
+  for (const [label, changes] of [
+    ["Singapore offset", { startTime: "2026-09-10T20:00:00+0800", endTime: "2026-09-10T21:00:00+0800" }],
+    ["UTC offset at the completed boundary", { startTime: "2026-09-10T12:00:00Z", endTime: "2026-09-10T13:00:00Z" }],
+  ])
+    await t.test(label, async () => {
+      const f = fixture({ current: [], history: [historicalBooking(changes)] });
+      assert.equal((await f.cancel()).status, "cancelled");
+    });
+});
+
+test("history cancellation rechecks linked zero-value orders and still requires explicit confirmation", async () => {
+  const f = fixture({ current: [], history: [historicalBooking()] });
+  await assert.rejects(f.cancel({}), matches("CONFIRMATION_REQUIRED"));
+  assert.equal(f.calls.length, 0);
+  const record = (await f.portal.bookings(f.session, "history"))[0];
+  await f.portal.reservationOrder(f.session, f.session.unit, record);
+  f.state.orders[0].tipsAmount = 1;
+  await assert.rejects(f.cancel(), matches("FREE_BOOKING_UNCONFIRMED"));
+  assert.equal(f.calls.filter(call => call.op === "orders").length, 2);
+  assert.equal(f.writes().length, 0);
+  const wrongUnit = fixture({ current: [], history: [historicalBooking()], orders: [order({ unitId: "foreign" })] });
+  await assert.rejects(wrongUnit.cancel(), matches("FREE_BOOKING_UNCONFIRMED"));
+  assert.equal(wrongUnit.writes().length, 0);
+  const readOnly = fixture({ current: [], history: [historicalBooking()], readOnly: true });
+  await assert.rejects(readOnly.cancel(), matches("READ_ONLY"));
+  assert.equal(readOnly.calls.length, 0);
+});
+
+test("retained history and failed history verification never report cancellation success or repeat the write", async (t) => {
+  for (const failure of ["retained", "read failed", "moved to current"])
+    await t.test(failure, async () => {
+      const f = fixture({
+        current: [],
+        history: [historicalBooking()],
+        override: async (op, body, context, state, calls) => {
+          if (op === "cancelBooking" && failure === "retained") return {};
+          if (op === "cancelBooking" && failure === "moved to current") {
+            state.current = state.history;
+            state.history = [];
+            return {};
+          }
+          if (failure === "read failed" && op === "bookings" && body.type === 1 && calls.some(call => call.op === "cancelBooking"))
+            throw new AppError("Offline", 502, "UPSTREAM_UNREACHABLE");
+        },
+      });
+      await assert.rejects(f.cancel(), matches("OUTCOME_UNCERTAIN"));
+      assert.equal(f.writes().length, 1);
+    });
 });
 
 test("zero-valued decimal strings remain valid but nonzero and malformed order money fail closed", async (t) => {

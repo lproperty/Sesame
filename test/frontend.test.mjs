@@ -422,6 +422,145 @@ async function bookFreeTennis(f) {
   );
 }
 
+function seedHistoricalBooking(f, changes = {}) {
+  const booking = {
+    id: "historical-free-booking",
+    facilityId: "demo-facility-6",
+    facilityDetailId: "demo-facility-6-2026-09-04-7",
+    facilityName: "Tennis Court (Off-Peak)",
+    unitId: "demo-unit-1",
+    projectId: "demo-project",
+    startTime: "2026.09.04 15:00:00",
+    endTime: "2026.09.04 16:00:00",
+    bookingNum: 1,
+    pricing: 0,
+    paidTotal: 0,
+    status: 1,
+    ...changes,
+  };
+  booking.orderNo = `ORDER-${booking.id}`;
+  f.demo.bookings.push(booking);
+  f.demo.orders.set(booking.orderNo, {
+    requestNo: booking.orderNo,
+    makeId: booking.id,
+    unitId: booking.unitId,
+    projectId: booking.projectId,
+    orderType: 0,
+    price: booking.pricing * 100,
+    transAmount: booking.paidTotal * 100,
+    tipsAmount: 0,
+    status: 2,
+  });
+  return booking;
+}
+
+for (const browserLive of [false, true]) {
+  test(`historical free tennis can be cancelled from History with confirmation in ${browserLive ? "Pages" : "local"} UI`, async (t) => {
+    const f = await fixture(t, { browserLive });
+    const free = seedHistoricalBooking(f);
+    const paid = seedHistoricalBooking(f, {
+      id: "historical-paid-booking",
+      pricing: 2.18,
+      paidTotal: 2.18,
+    });
+    await f.login();
+    f.window.location.hash = "#/bookings/history";
+    await f.until(() => f.all(".booking-row").length === 2, "past bookings");
+    const rowCancel = '.booking-row [data-action="cancel-booking"]';
+    assert.equal(f.all(rowCancel).length, 1);
+    assert.equal(f.query(rowCancel).dataset.value, free.id);
+    assert.equal(f.query('[data-action="booking-qr"]'), null);
+    f.query(rowCancel).click();
+    assert.match(f.query("#modal").textContent, /Cancel this past booking/);
+    assert.match(f.query("#modal").textContent, /removes this past booking from your history/);
+    assert.match(f.query("#modal").textContent, /does not undo past use or guarantee a monthly quota credit/);
+    assert.doesNotMatch(f.query("#modal").textContent, /time slot will be released/);
+    assert.equal(f.writes().length, 0);
+    f.query('#modal [data-action="booking-details"]').click();
+    assert.equal(f.writes().length, 0, "Keep booking does not cancel");
+    assert.ok(f.query('#modal [data-action="cancel-booking"]'));
+    assert.equal(f.query('#modal [data-action="booking-qr"]'), null);
+    assert.equal(f.query('#modal [data-action="complete-payment"]'), null);
+    assert.equal(f.query('#modal [data-action="payment-status"]'), null);
+    f.query('#modal [data-action="cancel-booking"]').click();
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    await f.until(
+      () => !f.query("#modal").open && f.all(".booking-row").length === 1,
+      "cancelled history record removed",
+    );
+    assert.equal(f.window.location.hash, "#/bookings/history");
+    assert.deepEqual(f.writes(), ["cancelBooking"]);
+    assert.deepEqual(f.demo.bookings.map(booking => booking.id), [paid.id]);
+    assert.equal(f.demo.orders.get(free.orderNo).status, 2);
+    assert.equal(f.query(rowCancel), null, "Paid history has no cancel action");
+    f.window.location.hash = "#/activity";
+    await f.until(() => f.query(".activity-metrics"), "cancellation activity");
+    assert.match(f.query("#main-content").textContent, /Cancellation confirmed/);
+    if (browserLive) {
+      const log = await f.readActivity();
+      assert.equal(log.events.length, 1);
+      assert.equal(log.events[0].action, "cancellation");
+      assert.equal(log.events[0].outcome, "success");
+      assert.equal(log.events[0].booking.id, free.id);
+      assert.equal(log.events[0].booking.tab, "history");
+      assert.equal(log.observations.find(row => row.id === free.id).tab, "history");
+    }
+    assert.deepEqual(f.consoleErrors, []);
+  });
+}
+
+test("historical cancellation stays disabled in read-only mode", async (t) => {
+  const f = await fixture(t, { browserLive: true, readOnly: true });
+  seedHistoricalBooking(f);
+  await f.login();
+  f.window.location.hash = "#/bookings/history";
+  await f.until(() => f.query(".booking-row"), "past booking");
+  const cancel = f.query('.booking-row [data-action="cancel-booking"]');
+  assert.equal(cancel.disabled, true);
+  cancel.click();
+  assert.equal(f.query("#modal").open, false);
+  f.query('.booking-row [data-action="booking-details"]').click();
+  assert.equal(f.query('#modal [data-action="cancel-booking"]').disabled, true);
+  assert.deepEqual(f.writes(), []);
+});
+
+for (const failure of ["declined", "retained"]) {
+  test(`historical cancellation ${failure} stays visible and is logged accurately`, async (t) => {
+    const f = await fixture(t, {
+      browserLive: true,
+      override: async (operation) => {
+        if (operation !== "cancelBooking") return;
+        if (failure === "declined")
+          throw new AppError("Cancellation declined by the estate.", 422, "ESTATE_REJECTED");
+        return {};
+      },
+    });
+    const booking = seedHistoricalBooking(f);
+    await f.login();
+    f.window.location.hash = "#/bookings/history";
+    await f.until(() => f.query(".booking-row"), "past booking");
+    f.query('.booking-row [data-action="cancel-booking"]').click();
+    f.query('[data-action="confirm-cancel-booking"]').click();
+    await f.until(
+      () => f.query("#reservation-error")?.textContent,
+      "historical cancellation error",
+    );
+    assert.match(
+      f.query("#reservation-error").textContent,
+      failure === "declined" ? /Cancellation declined/ : /could not be confirmed/,
+    );
+    assert.equal(f.all(".booking-row").length, 1);
+    assert.deepEqual(f.writes(), ["cancelBooking"]);
+    assert.equal(f.demo.bookings[0].id, booking.id);
+    const log = await f.readActivity();
+    assert.equal(log.events.length, 1);
+    assert.equal(log.events[0].outcome, failure === "declined" ? "failed" : "uncertain");
+    assert.equal(log.events[0].booking.tab, "history");
+    assert.deepEqual(f.consoleErrors, []);
+  });
+}
+
 for (const browserLive of [false, true]) {
   test(`free tennis has an estate QR and cancellation log in ${browserLive ? "Pages" : "local"} UI`, async (t) => {
     const f = await fixture(t, { browserLive });
