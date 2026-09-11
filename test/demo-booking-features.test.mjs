@@ -223,13 +223,14 @@ test("loopback QR rejects missing, cross-unit and expired bookings, while paid c
     f.demo("bookingQr", { unitId: UNIT, bookingId: free.id }, f.context),
     { code: "BOOKING_QR_UNAVAILABLE" },
   );
-  await assert.rejects(f.demo("cancelBooking", { id: free.id }, f.context), {
-    code: "ESTATE_REJECTED",
-  });
   assert.equal(
     (await f.demo("bookings", { status: 1, type: 1 }, f.context))[0].id,
     free.id,
   );
+  await f.demo("cancelBooking", { id: free.id }, f.context);
+  assert.deepEqual(await f.demo("bookings", { status: 1, type: 1 }, f.context), []);
+  assert.equal(f.demo.orders.get(free.orderNo).status, 2);
+  assert.ok(f.demo.bookings.includes(booking), "The paid booking is preserved");
 });
 
 test("browser demo confirms free tennis, scopes its QR and cancellation, and permits a new reservation after release", async (t) => {
@@ -352,4 +353,14 @@ test("browser demo preserves paid pending cancellation and refuses QR access wit
     (await f.read("/api/bookings?tab=history"))[0].id,
     free.receipt.bookingId,
   );
+  assert.equal(
+    (await f.post(`/api/bookings/${free.receipt.bookingId}/cancel`, {})).status,
+    400,
+  );
+  assert.deepEqual(
+    await f.mutate(`/api/bookings/${free.receipt.bookingId}/cancel`, { confirm: true }),
+    { status: "cancelled", bookingId: free.receipt.bookingId },
+  );
+  assert.deepEqual(await f.read("/api/bookings?tab=history"), []);
+  assert.equal((await f.request(`/api/bookings/${free.receipt.bookingId}/qr`)).status, 404);
 });

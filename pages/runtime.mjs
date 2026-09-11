@@ -323,7 +323,7 @@ export function createDemoRequest({ now = Date.now } = {}) {
       if (reservation[2] === "cancel") {
         if (!demoCanCancelBooking(booking, orders.get(booking.orderNo), now()))
           throw new AppError(
-            "Only pending reservations and future confirmed free tennis bookings can be cancelled in this demo.",
+            "Only pending reservations and eligible future or historical free tennis bookings can be cancelled in this demo.",
             409,
             "BOOKING_NOT_PENDING",
           );

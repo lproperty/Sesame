@@ -82,17 +82,25 @@ const bookingFromView = (id) =>
   sameActivityScope(state.bookingDetail.scope)
     ? state.bookingDetail.booking
     : null);
-const futureFreeTennis = (booking) => {
-  const value = String(booking?.startTime || "").replace(" ", "T");
-  const timestamp = Date.parse(
-    value + (/(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? "" : "+08:00"),
-  );
-  return (
-    booking?.tab === "current" &&
-    freeBooking(booking) &&
-    /tennis/i.test(booking.facilityName || "") &&
-    timestamp > Date.now()
-  );
+const cancellableFreeTennis = (booking) => {
+  if (
+    !["current", "history"].includes(booking?.tab) ||
+    !freeBooking(booking) ||
+    !/tennis/i.test(booking.facilityName || "")
+  )
+    return false;
+  const timestamp = (value) => {
+    const time = String(value || "").replace(" ", "T");
+    return Date.parse(
+      time + (/(?:Z|[+-]\d{2}:?\d{2})$/.test(time) ? "" : "+08:00"),
+    );
+  };
+  const start = timestamp(booking.startTime);
+  if (!Number.isFinite(start)) return false;
+  const now = Date.now();
+  if (booking.tab === "current") return start > now;
+  const end = timestamp(booking.endTime);
+  return Number.isFinite(end) && end > start && end <= now;
 };
 const activityTime = (value) => {
   if (!value) return "Time not provided";
@@ -793,6 +801,7 @@ function renderBookings() {
                   <div class="booking-actions" role="group" aria-label="Booking actions">
                     ${tab === "current" ? `<button class="button booking-qr-button" data-action="booking-qr" data-value="${esc(b.id)}">${icon("qr")}<span>Entry QR</span></button>` : ""}
                     <button class="button secondary" data-action="booking-details" data-value="${esc(b.id)}"><span>View details</span></button>
+                    ${tab === "history" && cancellableFreeTennis(b) ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(b.id)}" ${state.config.readOnly ? "disabled" : ""}><span>Cancel booking</span></button>` : ""}
                   </div>
                 </div>
               </article>`;
@@ -1335,7 +1344,7 @@ function showBookingDetails(id, payment = null) {
   const pending =
     booking.tab === "unpaid" && !["paid", "free"].includes(payment?.status);
   const canCancel =
-    payment?.canCancel ?? (pending || futureFreeTennis(booking));
+    payment?.canCancel ?? (pending || cancellableFreeTennis(booking));
   const orderNo =
     payment?.orderNo || booking.orderNo || booking.receipt?.orderNo;
   const instructions =
@@ -1354,7 +1363,7 @@ function showBookingDetails(id, payment = null) {
     ${booking.tab === "current" && freeBooking(booking) && !payment ? '<p class="status-line">Confirmed · Free</p>' : ""}
     <div class="modal-actions reservation-actions">${booking.tab === "current" ? `<button class="button" data-action="booking-qr" data-value="${esc(id)}">${icon("qr")} Show entry QR</button>` : ""}${pending ? `<button class="button" data-action="complete-payment" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>${freeBooking(booking) ? "Check confirmation" : "Complete payment"}</button>` : ""}
     ${booking.tab === "unpaid" || payment ? `<button class="button secondary" data-action="payment-status" data-booking="${esc(id)}">${icon("refresh")} Check payment</button>` : ""}
-    ${canCancel ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>Cancel reservation</button>` : ""}
+    ${canCancel ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>${booking.tab === "history" ? "Cancel booking" : "Cancel reservation"}</button>` : ""}
     <button class="button secondary" data-action="close-modal">Close</button></div>`,
     "YOUR BOOKING",
   );
@@ -1364,17 +1373,20 @@ function confirmCancellation(id) {
   const booking = bookingFromView(id);
   if (
     !booking ||
-    (booking.tab !== "unpaid" && !futureFreeTennis(booking)) ||
+    (booking.tab !== "unpaid" && !cancellableFreeTennis(booking)) ||
     state.config.readOnly
   )
     return;
+  const historical = booking.tab === "history";
   openModal(
     "cancel-booking",
-    "Cancel this reservation?",
-    `<p class="modal-copy">${esc(booking.facilityName)} · ${esc(dateFormat(booking.startTime.slice(0, 10), { weekday: "long", month: "long", year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p><p>Your time slot will be released when the estate confirms cancellation.</p><span class="result-reference">Booking reference: ${esc(id)}</span><div class="form-error" id="reservation-error" role="alert"></div><div class="modal-actions"><button class="button secondary" data-action="booking-details" data-value="${esc(id)}">Keep reservation</button><button class="button" data-action="confirm-cancel-booking" data-value="${esc(id)}">Confirm cancellation</button></div>`,
-    freeBooking(booking) && booking.tab === "current"
-      ? "FREE TENNIS BOOKING"
-      : "PENDING RESERVATION",
+    historical ? "Cancel this past booking?" : "Cancel this reservation?",
+    `<p class="modal-copy">${esc(booking.facilityName)} · ${esc(dateFormat(booking.startTime.slice(0, 10), { weekday: "long", month: "long", year: "numeric" }))} · ${esc(timeRange(booking.startTime.slice(11), booking.endTime.slice(11)))}</p><p>${historical ? "Cancelling removes this past booking from your history. It does not undo past use or guarantee a monthly quota credit." : "Your time slot will be released when the estate confirms cancellation."}</p><span class="result-reference">Booking reference: ${esc(id)}</span><div class="form-error" id="reservation-error" role="alert"></div><div class="modal-actions"><button class="button secondary" data-action="booking-details" data-value="${esc(id)}">${historical ? "Keep booking" : "Keep reservation"}</button><button class="button" data-action="confirm-cancel-booking" data-value="${esc(id)}">Confirm cancellation</button></div>`,
+    historical
+      ? "PAST FREE TENNIS BOOKING"
+      : freeBooking(booking) && booking.tab === "current"
+        ? "FREE TENNIS BOOKING"
+        : "PENDING RESERVATION",
   );
 }
 
@@ -1409,7 +1421,11 @@ async function mutateReservation(id, action) {
     if (action === "cancel") {
       closeModal();
       await route();
-      toast("Reservation cancelled.");
+      toast(
+        bookingForLog?.tab === "history"
+          ? "Past booking cancelled."
+          : "Reservation cancelled.",
+      );
     } else {
       showBookingDetails(id, result);
       if (
