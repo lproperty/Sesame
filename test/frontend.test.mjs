@@ -422,6 +422,30 @@ async function bookFreeTennis(f) {
   );
 }
 
+for (const browserLive of [false, true]) {
+  test(`ongoing tennis can be selected, booked and opened with QR in ${browserLive ? "Pages" : "local"} UI`, async (t) => {
+    const f = await fixture(t, { browserLive, now: () => Date.parse("2026-09-06T09:30:00+08:00") });
+    await f.login();
+    f.query('.facility-card[href="#/facility/demo-facility-6"]').click();
+    const selected = '[data-action="slot"][data-value="demo-facility-6-2026-09-06-1"]';
+    await f.until(() => f.query(selected), "today's ongoing slot");
+    assert.equal(f.query(selected).disabled, false);
+    assert.match(f.query(selected).textContent, /In progress/);
+    const ended = f.query('[data-action="slot"][data-value="demo-facility-6-2026-09-06-0"]');
+    assert.equal(ended.disabled, true);
+    assert.match(ended.textContent, /Session has ended/);
+    f.query(selected).click();
+    assert.match(f.query("#app").textContent, /original end time and full listed price/);
+    f.query("#book-submit").click();
+    await f.until(() => /Confirmed · Free/.test(f.query("#modal")?.textContent), "ongoing booking confirmation");
+    f.query('[data-action="go-bookings"]').click();
+    await f.until(() => f.query('[data-action="booking-qr"]'), "ongoing booking entry action");
+    f.query('[data-action="booking-qr"]').click();
+    await f.until(() => f.query("#booking-qr-images img"), "ongoing booking QR");
+    assert.deepEqual(f.consoleErrors, []);
+  });
+}
+
 function seedHistoricalBooking(f, changes = {}) {
   const booking = {
     id: "historical-free-booking",

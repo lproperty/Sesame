@@ -706,7 +706,7 @@ function slotMarkup() {
   return state.slots
     .map(
       (slot) =>
-        `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? "Available" : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button></div>`,
+        `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? (slot.inProgress ? "In progress" : "Available") : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button></div>`,
     )
     .join("");
 }
@@ -721,6 +721,7 @@ function summaryMarkup() {
     <div class="summary-row"><dt>Unit</dt><dd>${esc(unitLabel(state.session.unit))}</dd></div>
     <div class="summary-row"><dt>Quantity</dt><dd>${slot.maxQuantity > 1 ? `<select id="booking-quantity" aria-label="Booking quantity">${Array.from({ length: slot.maxQuantity }, (_, i) => `<option value="${i + 1}" ${state.quantity === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select>` : "1 session"}</dd></div>
     </dl><div class="total-row"><span>Total</span><strong>${money(slot.price * state.quantity)}</strong></div><p class="summary-price-note">The estate’s price for this time slot. Review the facility information for fee and deposit details.</p>
+    ${slot.inProgress ? `<p class="summary-disclaimer">This session has started. The original end time and full listed price still apply.</p>` : ""}
     <div class="form-error" role="alert">${esc(state.bookingError)}</div>
     <button class="button full" id="book-submit" data-action="book" ${state.committing || state.config.readOnly ? "disabled" : ""}>${state.committing ? "Booking…" : state.config.readOnly ? "Read-only mode" : (state.config.demo ? "Book demo · " : "Book · ") + money(slot.price * state.quantity)} ${icon("arrow")}</button>
     <p class="summary-disclaimer">${state.config.readOnly ? "Submissions are disabled in read-only mode." : "Tap Book to reserve this time."}</p>`;
