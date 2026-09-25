@@ -3054,3 +3054,162 @@ dialog::backdrop {
     font-size: 10px;
   }
 }
+
+/* Ended sessions are collapsed by default; they can never be booked. */
+.slot-toggle-row {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+.slot-empty .button {
+  margin: 12px auto 0;
+}
+.summary-when {
+  display: none;
+}
+/* Single-column layouts pin the chosen time and Book button above the tab bar,
+   so booking never means scrolling past every slot and back again. */
+@media (max-width: 1000px) and (min-height: 501px) {
+  .summary-panel.has-selection {
+    position: sticky;
+    top: auto;
+    bottom: calc(
+      var(--mobile-nav-height, 0px) + env(safe-area-inset-bottom, 0px) + 10px
+    );
+    z-index: 5;
+    padding: 14px 16px 16px;
+    border-color: #cfd9cb;
+    box-shadow: 0 8px 30px #25382f26;
+  }
+  .summary-panel.has-selection > h2,
+  .summary-panel.has-selection .summary-row:not(.quantity-choice),
+  .summary-panel.has-selection .total-row,
+  .summary-panel.has-selection .summary-price-note,
+  .summary-panel.has-selection > .summary-disclaimer:last-child {
+    display: none;
+  }
+  .summary-panel.has-selection .summary-facility {
+    margin: 0;
+    font-size: 14px;
+  }
+  .summary-panel.has-selection .summary-when {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .summary-panel.has-selection dl {
+    margin: 6px 0 0;
+  }
+  .summary-panel.has-selection .summary-disclaimer {
+    margin-top: 6px;
+    text-align: left;
+  }
+  .summary-panel.has-selection .form-error {
+    margin: 10px 0 0;
+  }
+  .summary-panel.has-selection > #book-submit {
+    margin-top: 10px;
+  }
+}
+
+/* Copy buttons beside payment details and booking references. */
+.copy-button {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 10px;
+  border: 1px solid #cfd9cb;
+  border-radius: 30px;
+  background: var(--white);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.copy-button:hover {
+  background: var(--sage);
+}
+@media (pointer: coarse) {
+  .copy-button {
+    min-height: 32px;
+    padding: 4px 12px;
+    font-size: 12px;
+  }
+}
+
+/* Phones: facilities as compact rows so all of them fit in a few screens, and
+   a sign-in form whose password field and button are visible without scrolling. */
+@media (max-width: 600px) {
+  .facility-grid {
+    gap: 10px;
+  }
+  .facility-card {
+    display: grid;
+    grid-template-columns: 108px minmax(0, 1fr);
+    min-height: 118px;
+  }
+  .facility-image {
+    height: auto;
+  }
+  .facility-image .image-label {
+    display: none;
+  }
+  .facility-info {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 14px;
+  }
+  .facility-info h3 {
+    font-size: 18px;
+    min-height: 0;
+  }
+  .facility-info .facility-excerpt {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.5;
+    height: auto;
+  }
+  .facility-bottom {
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 0;
+  }
+  .facility-card:hover {
+    transform: none;
+  }
+}
+@media (max-width: 500px) {
+  .login-visual {
+    min-height: 0;
+    padding-bottom: 18px;
+  }
+  .login-story {
+    padding-top: 18px;
+  }
+  .login-story h1 {
+    font-size: 30px;
+    margin: 0;
+  }
+  .login-story p,
+  .login-form > .eyebrow,
+  .account-type {
+    display: none;
+  }
+  .login-panel {
+    padding-top: 20px;
+  }
+  .login-panel .small-top-label {
+    margin-bottom: 8px;
+  }
+  .login-form h2 {
+    font-size: 30px;
+    margin: 0 0 4px;
+  }
+  .login-form .intro {
+    margin-bottom: 16px;
+  }
+}

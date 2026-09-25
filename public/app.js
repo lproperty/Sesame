@@ -1,4 +1,5 @@
 import { createPaymentQr } from "./payment-qr.js";
+import { bookingCalendar, calendarFileName } from "./calendar.js";
 import {
   entryPassFromSession,
   createEntryQr,
@@ -35,6 +36,7 @@ const state = {
   weekStart: "",
   slots: [],
   selectedSlot: null,
+  showEndedSlots: false,
   quantity: 1,
   bookingError: "",
   availabilityError: "",
@@ -289,6 +291,12 @@ const icon = (name, extra = "") =>
   `<svg class="icon ${extra}" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.info}</svg>`;
 const brand = () =>
   '<span class="brand-mark" aria-hidden="true">S</span><span class="brand-name">SESAME<span class="brand-sub">RESIDENT PORTAL</span></span>';
+const copyButton = (value, label) =>
+  value
+    ? `<button type="button" class="copy-button" data-action="copy" data-value="${esc(value)}" aria-label="Copy ${esc(label)}">Copy</button>`
+    : "";
+const calendarButton = (id) =>
+  `<button class="button secondary" data-action="add-calendar" data-value="${esc(id)}">${icon("calendar")} Add to calendar</button>`;
 const image = (src, alt, extra = "") =>
   `<img src="${esc(!src || src.startsWith("/assets/") ? assetUrl(src || "/assets/estate.jpg") : src)}" alt="${esc(alt)}" ${extra}>`;
 
@@ -408,6 +416,43 @@ async function api(path, data) {
   return value;
 }
 
+// Re-rendering replaces the focused button. Move focus to its replacement so
+// keyboard and screen reader users keep their place. Inputs and selects are
+// excluded because focusing them can reopen a mobile keyboard or picker.
+function focusKey(element) {
+  if (element?.tagName !== "BUTTON" || !app.contains(element)) return null;
+  return {
+    id: element.id,
+    action: element.dataset.action,
+    value: element.dataset.value,
+  };
+}
+
+function restoreFocus(key) {
+  if (
+    !key ||
+    (document.activeElement && document.activeElement !== document.body)
+  )
+    return;
+  const match = key.id
+    ? document.getElementById(key.id)
+    : key.action
+      ? [...app.querySelectorAll("button[data-action]")].find(
+          (element) =>
+            element.dataset.action === key.action &&
+            element.dataset.value === key.value,
+        )
+      : null;
+  if (match && !match.disabled && app.contains(match))
+    match.focus({ preventScroll: true });
+}
+
+function replaceContent(target, html) {
+  const key = focusKey(document.activeElement);
+  target.innerHTML = html;
+  restoreFocus(key);
+}
+
 let toastTimer;
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -426,7 +471,7 @@ function renderLogin(message = "") {
       ${image("/assets/estate.jpg", "The resident clubhouse and pool at dusk", 'class="login-photo"')}
       <div class="brand">${brand()}</div>
       <div class="login-story"><span class="eyebrow">A little more to come home to</span>
-        <h1>Every day,<br>a little <em>extraordinary.</em></h1>
+        <h1>Every day, <br>a little <em>extraordinary.</em></h1>
         <p>Make the most of the spaces you call home. Your next gathering, game or quiet moment starts here.</p>
       </div>
       <div class="login-location">${icon("pin")} Your community</div>
@@ -479,7 +524,9 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
         : section === "Activity"
           ? "activity"
           : "facilities";
-  app.innerHTML = `<div class="app-layout">
+  replaceContent(
+    app,
+    `<div class="app-layout">
     <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/qr" aria-label="My resident entry QR">${brand()}</a>
       <p class="nav-label">YOUR ESTATE</p>
       <nav><a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>
@@ -504,7 +551,8 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       <a href="#/activity" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")}<span>Activity</span></a>
       <button type="button" data-action="${authenticated ? "logout" : "forget-entry"}">${icon("logout")}<span>${state.config.staticDemo ? "Exit demo" : authenticated ? "Sign out" : "Forget pass"}</span></button>
     </nav>
-  </div>`;
+  </div>`,
+  );
 }
 
 let entryTimer;
@@ -703,23 +751,40 @@ function slotMarkup() {
     return `<div class="slot-empty" role="alert"><p>${esc(state.availabilityError)}</p><button class="text-button" data-action="refresh-slots">Try again</button></div>`;
   if (!state.slots.length)
     return '<div class="slot-empty">No sessions have been released for this date. Try another day.</div>';
-  return state.slots
-    .map(
-      (slot) =>
-        `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? (slot.inProgress ? "In progress" : "Available") : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button></div>`,
-    )
-    .join("");
+  // Ended sessions can never be booked, so keep them out of the way by default.
+  const ended = state.slots.filter((slot) => slot.ended);
+  const shown = state.showEndedSlots
+    ? state.slots
+    : state.slots.filter((slot) => !slot.ended);
+  const nextDate = addDays(state.date, 1);
+  const toggle = ended.length
+    ? `<div class="slot-toggle-row"><button class="text-button" data-action="toggle-ended-slots" aria-expanded="${state.showEndedSlots}">${state.showEndedSlots ? "Hide" : "Show"} ${ended.length} ended ${ended.length === 1 ? "session" : "sessions"}</button></div>`
+    : "";
+  const allEnded =
+    ended.length === state.slots.length
+      ? `<div class="slot-empty"><p>All sessions for this date have ended.</p>${nextDate <= state.config.lastDate ? `<button class="button secondary small" data-action="date" data-value="${nextDate}">See ${esc(dateFormat(nextDate, { weekday: "short" }))} ${icon("arrow")}</button>` : ""}</div>`
+      : "";
+  return (
+    allEnded +
+    toggle +
+    shown
+      .map(
+        (slot) =>
+          `<div class="slot-card"><button class="slot ${state.selectedSlot?.id === slot.id ? "selected" : ""}" data-action="slot" data-value="${esc(slot.id)}" aria-pressed="${state.selectedSlot?.id === slot.id}" ${!slot.enabled ? "disabled" : ""}><strong>${esc(timeRange(slot.startTime, slot.endTime))}</strong><span class="slot-bottom"><span>${slot.enabled ? (slot.inProgress ? "In progress" : "Available") : esc(slot.reason)}</span><span>${esc(money(slot.price))}</span></span></button></div>`,
+      )
+      .join("")
+  );
 }
 
 function summaryMarkup() {
   const slot = state.selectedSlot;
   if (!slot)
     return `<h2>Your booking</h2><div class="summary-placeholder">${icon("calendar")}<strong>Choose a time.</strong><p>Your date, time and price will appear here.</p></div><button class="button full" disabled>Choose a time ${icon("arrow")}</button><div class="form-error" role="alert">${esc(state.bookingError)}</div>`;
-  return `<h2>Your booking</h2><p class="summary-facility">${esc(state.detail.name)}</p><dl>
+  return `<h2>Your booking</h2><p class="summary-facility">${esc(state.detail.name)}</p><p class="summary-when">${esc(dateFormat(slot.date, { weekday: "short" }))} · ${esc(timeRange(slot.startTime, slot.endTime))}</p><dl>
     <div class="summary-row"><dt>Date</dt><dd>${esc(dateFormat(slot.date, { weekday: "short" }))}</dd></div>
     <div class="summary-row"><dt>Time</dt><dd>${esc(timeRange(slot.startTime, slot.endTime))}</dd></div>
     <div class="summary-row"><dt>Unit</dt><dd>${esc(unitLabel(state.session.unit))}</dd></div>
-    <div class="summary-row"><dt>Quantity</dt><dd>${slot.maxQuantity > 1 ? `<select id="booking-quantity" aria-label="Booking quantity">${Array.from({ length: slot.maxQuantity }, (_, i) => `<option value="${i + 1}" ${state.quantity === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select>` : "1 session"}</dd></div>
+    <div class="summary-row${slot.maxQuantity > 1 ? " quantity-choice" : ""}"><dt>Quantity</dt><dd>${slot.maxQuantity > 1 ? `<select id="booking-quantity" aria-label="Booking quantity">${Array.from({ length: slot.maxQuantity }, (_, i) => `<option value="${i + 1}" ${state.quantity === i + 1 ? "selected" : ""}>${i + 1}</option>`).join("")}</select>` : "1 session"}</dd></div>
     </dl><div class="total-row"><span>Total</span><strong>${money(slot.price * state.quantity)}</strong></div><p class="summary-price-note">The estate’s price for this time slot. Review the facility information for fee and deposit details.</p>
     ${slot.inProgress ? `<p class="summary-disclaimer">This session has started. The original end time and full listed price still apply.</p>` : ""}
     <div class="form-error" role="alert">${esc(state.bookingError)}</div>
@@ -734,10 +799,10 @@ function renderDetail() {
     <div class="booking-layout"><div><section class="panel" aria-labelledby="choose-date-title"><div class="panel-title"><h2 id="choose-date-title"><span class="step-number">1</span>Choose a date</h2><label><span class="visually-hidden">Booking date</span><input class="date-input" id="booking-date" type="date" min="${state.config.today}" max="${state.config.lastDate}" value="${state.date}"></label></div>
       <div class="calendar-nav"><button class="icon-button" data-action="week-prev" aria-label="Previous week" ${state.weekStart <= state.config.today ? "disabled" : ""}>${icon("back")}</button><strong>${esc(dateFormat(state.weekStart, { day: undefined, month: "long", year: "numeric" }))}</strong><button class="icon-button" data-action="week-next" aria-label="Next week" ${addDays(state.weekStart, 7) > state.config.lastDate ? "disabled" : ""}>${icon("arrow")}</button></div>
       <div class="date-strip">${dateStrip()}</div><div class="slot-heading"><h3>Available times</h3><span>Singapore time · SGT</span></div>
-      ${!state.slotsLoading && state.slots.length && state.slots.every((s) => s.reason === "Unavailable") ? '<div class="not-released">The estate currently marks these times unavailable. Please check another date.</div>' : ""}
+      ${!state.slotsLoading && state.slots.some((s) => !s.ended) && state.slots.every((s) => s.ended || s.reason === "Unavailable") ? '<div class="not-released">The estate currently marks these times unavailable. Please check another date.</div>' : ""}
       <div class="slots" id="slots" aria-live="polite">${slotMarkup()}</div><div class="availability-note">${icon("refresh")} Availability updates when you book.</div>
     </section>
-    </div><aside class="panel summary-panel" id="booking-summary" aria-label="Your booking summary">${summaryMarkup()}</aside>
+    </div><aside class="panel summary-panel${state.selectedSlot ? " has-selection" : ""}" id="booking-summary" aria-label="Your booking summary">${summaryMarkup()}</aside>
     <details class="panel rules-panel facility-information"><summary>Facility information & rules ${icon("down")}</summary><div class="introduction-full">${esc(f.introduction || "")}</div><div class="rules-content">${safeRichText(f.regulations)}</div></details></div>`);
   const strip = document.querySelector(".date-strip");
   const selected = strip?.querySelector(".selected");
@@ -750,7 +815,9 @@ function renderDetail() {
 
 function renderSummary() {
   const target = document.querySelector("#booking-summary");
-  if (target) target.innerHTML = summaryMarkup();
+  if (!target) return;
+  target.classList.toggle("has-selection", Boolean(state.selectedSlot));
+  replaceContent(target, summaryMarkup());
 }
 
 const tabNames = {
@@ -906,20 +973,39 @@ async function loadActivity(generation) {
   renderActivity();
 }
 
+function downloadFile(name, type, data) {
+  const url = URL.createObjectURL(new Blob([data], { type }));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 async function exportActivity() {
   const scope = activityScope();
   if (!scope) return;
   const data = await activityStore.export(scope);
   if (!sameActivityScope(scope)) return;
-  const blob = new Blob([data], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `sesame-activity-${new Date().toISOString().slice(0, 10)}.json`;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  downloadFile(
+    `sesame-activity-${new Date().toISOString().slice(0, 10)}.json`,
+    "application/json",
+    data,
+  );
+}
+
+// Show the week containing the chosen date, then load its times.
+function selectDate(date) {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date) && date >= state.config.today) {
+    const offset =
+      Math.floor(
+        (Date.parse(date) - Date.parse(state.config.today)) / 86_400_000 / 7,
+      ) * 7;
+    state.weekStart = addDays(state.config.today, offset);
+  }
+  return loadAvailability(date);
 }
 
 async function loadAvailability(date) {
@@ -934,6 +1020,7 @@ async function loadAvailability(date) {
   const generation = ++state.availabilityGeneration;
   const routeGeneration = state.routeGeneration;
   const facility = state.detail;
+  if (date !== state.date) state.showEndedSlots = false;
   state.date = date;
   state.slotsLoading = true;
   state.availabilityError = "";
@@ -987,6 +1074,7 @@ async function route() {
   state.availabilityGeneration++;
   state.detail = null;
   state.bookingDetail = null;
+  state.showEndedSlots = false;
   resetSelection();
   closeModal();
   const parts = location.hash.replace(/^#\/?/, "").split("/");
@@ -1044,6 +1132,7 @@ async function route() {
 }
 
 let returnFocus;
+let resultBooking = null;
 let bookingQrTimer;
 let bookingQrGeneration = 0;
 let bookingQrInFlight = false;
@@ -1167,6 +1256,7 @@ modal.addEventListener("close", () => {
   document.documentElement.classList.remove("modal-open");
   state.modalType = "";
   state.bookingDetail = null;
+  resultBooking = null;
   if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 });
 modal.addEventListener("cancel", (event) => {
@@ -1259,8 +1349,12 @@ async function bookSelected() {
         result.status === "confirmed_free" ? "current" : "unpaid",
       );
     state.committing = false;
-    if (state.session && generation === state.routeGeneration)
+    if (state.session && generation === state.routeGeneration) {
       showResult(result);
+      // Refresh the times behind the dialog so this booking is not shown as
+      // still available when the dialog closes.
+      void loadAvailability(selection.date);
+    }
   } catch (error) {
     await finishActivityAction(
       activityAttempt,
@@ -1277,6 +1371,7 @@ async function bookSelected() {
         message:
           "The booking result could not be confirmed. Check My bookings or the estate app before trying again.",
       });
+      void loadAvailability(selection.date);
     } else {
       if (
         [
@@ -1302,7 +1397,7 @@ function bankInstructions() {
   const payment = state.config.payment;
   if (!payment)
     return '<p class="payment-instructions">Complete payment in the estate app.</p>';
-  return `<section class="bank-details"><h3>Pay by bank transfer or PayNow UEN</h3><div class="bank-grid"><dl><dt>Payee</dt><dd>${esc(payment.payee)}</dd><dt>UEN</dt><dd>${esc(payment.uen)}</dd><dt>${esc(payment.bankName)} account</dt><dd>${esc(payment.bankAccount)}</dd></dl><div class="payment-qr">${createPaymentQr(payment.qrText)}</div></div></section><p class="payment-instructions">Send proof of payment through <strong>E-Forms 13</strong> in the estate app, or email <a href="mailto:${esc(payment.email)}">${esc(payment.email)}</a>. Include your unit and booking reference.</p>`;
+  return `<section class="bank-details"><h3>Pay by bank transfer or PayNow UEN</h3><div class="bank-grid"><dl><dt>Payee</dt><dd>${esc(payment.payee)}</dd><dt>UEN</dt><dd>${esc(payment.uen)} ${copyButton(payment.uen, "UEN")}</dd><dt>${esc(payment.bankName)} account</dt><dd>${esc(payment.bankAccount)} ${copyButton(payment.bankAccount, "account number")}</dd></dl><div class="payment-qr">${createPaymentQr(payment.qrText)}</div></div></section><p class="payment-instructions">Send proof of payment through <strong>E-Forms 13</strong> in the estate app, or email <a href="mailto:${esc(payment.email)}">${esc(payment.email)}</a>. Include your unit and booking reference.</p>`;
 }
 
 function showResult(result) {
@@ -1316,12 +1411,13 @@ function showResult(result) {
         : "Booking submitted."
       : "Booking status unconfirmed.",
     `<div class="result-icon">${icon(ok ? "calendarCheck" : "info")}</div><p class="modal-copy">${esc(state.config.demo && ok ? "This reservation exists only in the offline demonstration. No payment is needed." : result.message)}</p>${reviewDetails(result)}
-    ${result.orderNo ? `<span class="result-reference">Order reference: ${esc(result.orderNo)}</span>` : ""}${result.bookingId ? `<span class="result-reference">Booking reference: ${esc(result.bookingId)}</span>` : ""}
+    ${result.orderNo ? `<span class="result-reference">Order reference: ${esc(result.orderNo)} ${copyButton(result.orderNo, "order reference")}</span>` : ""}${result.bookingId ? `<span class="result-reference">Booking reference: ${esc(result.bookingId)} ${copyButton(result.bookingId, "booking reference")}</span>` : ""}
     ${ok && !state.config.demo && !free ? bankInstructions() : ""}
     ${ok ? `<p class="status-line" id="payment-status" role="status">${free ? (result.status === "confirmed_free" ? "Confirmed · Free" : "No payment required. Check My bookings for confirmation.") : "Payment status: pending"}</p>` : ""}
-    <div class="modal-actions">${ok && !free ? `<button class="button secondary" data-action="payment-status" data-value="${esc(result.previewId)}">${icon("refresh")} Check payment</button>` : ""}<button class="button" data-action="go-bookings" data-tab="${result.status === "confirmed_free" ? "current" : "unpaid"}">View my bookings ${icon("arrow")}</button></div>`,
+    <div class="modal-actions">${ok && !free ? `<button class="button secondary" data-action="payment-status" data-value="${esc(result.previewId)}">${icon("refresh")} Check payment</button>` : ""}${ok && result.bookingId ? calendarButton(result.bookingId) : ""}<button class="button" data-action="go-bookings" data-tab="${result.status === "confirmed_free" ? "current" : "unpaid"}">View my bookings ${icon("arrow")}</button></div>`,
     ok ? "BOOKING SUBMITTED" : "SUBMISSION STATUS",
   );
+  resultBooking = ok && result.bookingId ? receiptBooking(result) : null;
 }
 
 function paymentStatusText(status) {
@@ -1365,6 +1461,7 @@ function showBookingDetails(id, payment = null) {
     <div class="modal-actions reservation-actions">${booking.tab === "current" ? `<button class="button" data-action="booking-qr" data-value="${esc(id)}">${icon("qr")} Show entry QR</button>` : ""}${pending ? `<button class="button" data-action="complete-payment" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>${freeBooking(booking) ? "Check confirmation" : "Complete payment"}</button>` : ""}
     ${booking.tab === "unpaid" || payment ? `<button class="button secondary" data-action="payment-status" data-booking="${esc(id)}">${icon("refresh")} Check payment</button>` : ""}
     ${canCancel ? `<button class="button secondary" data-action="cancel-booking" data-value="${esc(id)}" ${state.config.readOnly ? "disabled" : ""}>${booking.tab === "history" ? "Cancel booking" : "Cancel reservation"}</button>` : ""}
+    ${["current", "unpaid"].includes(booking.tab) ? calendarButton(id) : ""}
     <button class="button secondary" data-action="close-modal">Close</button></div>`,
     "YOUR BOOKING",
   );
@@ -1462,7 +1559,7 @@ async function mutateReservation(id, action) {
 }
 
 function metadataRows(rows) {
-  return `<dl class="inspection-details">${rows.map(([label, value]) => `<div class="summary-row"><dt>${esc(label)}</dt><dd>${esc(value == null || value === "" ? "Not provided" : value)}</dd></div>`).join("")}</dl>`;
+  return `<dl class="inspection-details">${rows.map(([label, value, copy]) => `<div class="summary-row"><dt>${esc(label)}</dt><dd>${value == null || value === "" ? "Not provided" : esc(value) + (copy ? " " + copyButton(value, label.toLowerCase()) : "")}</dd></div>`).join("")}</dl>`;
 }
 
 function ownBookingMetadata(booking) {
@@ -1477,8 +1574,8 @@ function ownBookingMetadata(booking) {
           (booking.price == null ? null : booking.price * booking.quantity),
       ),
     ],
-    ["Booking reference", booking.id],
-    ["Order reference", booking.orderNo],
+    ["Booking reference", booking.id, true],
+    ["Order reference", booking.orderNo, true],
   ]);
 }
 
@@ -1575,14 +1672,7 @@ document.addEventListener("change", async (event) => {
     renderActivity();
   } else if (target.id === "booking-date") {
     if (!target.value || !target.checkValidity()) return;
-    const offset =
-      Math.floor(
-        (Date.parse(target.value) - Date.parse(state.config.today)) /
-          86_400_000 /
-          7,
-      ) * 7;
-    state.weekStart = addDays(state.config.today, offset);
-    await loadAvailability(target.value);
+    await selectDate(target.value);
   } else if (target.id === "booking-quantity") {
     state.quantity = Number(target.value);
     state.bookingError = "";
@@ -1695,7 +1785,7 @@ document.addEventListener("click", async (event) => {
       state.filter = "All facilities";
       state.search = "";
       renderFacilities();
-    } else if (action === "date") await loadAvailability(button.dataset.value);
+    } else if (action === "date") await selectDate(button.dataset.value);
     else if (action === "week-prev" || action === "week-next") {
       const next = addDays(state.weekStart, action === "week-prev" ? -7 : 7);
       if (next >= state.config.today && next <= state.config.lastDate) {
@@ -1708,11 +1798,16 @@ document.addEventListener("click", async (event) => {
       state.selectedSlot = slot;
       state.quantity = 1;
       state.bookingError = "";
-      document.querySelector("#slots").innerHTML = slotMarkup();
+      replaceContent(document.querySelector("#slots"), slotMarkup());
       renderSummary();
-      document
-        .querySelector("#booking-summary")
-        ?.scrollIntoView({ block: "nearest" });
+      // Narrow screens pin the summary to the bottom of the screen, so the
+      // page only scrolls when the summary is not already in view.
+      const summary = document.querySelector("#booking-summary");
+      if (summary && getComputedStyle(summary).position !== "sticky")
+        summary.scrollIntoView({ block: "nearest" });
+    } else if (action === "toggle-ended-slots") {
+      state.showEndedSlots = !state.showEndedSlots;
+      replaceContent(document.querySelector("#slots"), slotMarkup());
     } else if (action === "refresh-slots") await loadAvailability(state.date);
     else if (action === "close-modal") closeModal();
     else if (action === "book") await bookSelected();
@@ -1769,6 +1864,26 @@ document.addEventListener("click", async (event) => {
       } finally {
         button.disabled = false;
       }
+    } else if (action === "copy") {
+      // Clipboard writes must start inside the tap, before any await.
+      const copied = navigator.clipboard?.writeText(button.dataset.value).then(
+        () => true,
+        () => false,
+      );
+      button.textContent = (await copied) ? "Copied" : "Copy unavailable";
+      setTimeout(() => {
+        if (button.isConnected) button.textContent = "Copy";
+      }, 2000);
+    } else if (action === "add-calendar") {
+      const id = button.dataset.value;
+      const booking =
+        resultBooking?.id === id ? resultBooking : bookingFromView(id);
+      if (booking)
+        downloadFile(
+          calendarFileName(booking),
+          "text/calendar",
+          bookingCalendar(booking),
+        );
     } else if (action === "booking-qr") showBookingQr(button.dataset.value);
     else if (action === "refresh-booking-qr") {
       if (activeBookingQr) {
@@ -1828,8 +1943,13 @@ window.addEventListener("beforeunload", (event) => {
   }
 });
 
+// Checking another app while choosing a time (a calendar, a message from a
+// friend) keeps the booking page. Otherwise Sesame reopens on the entry QR.
+const KEEP_BOOKING_PLACE_MS = 10 * 60_000;
+let hiddenAt = 0;
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
+    hiddenAt = Date.now();
     stopBookingQr({ retain: true });
     stopEntry();
     document.querySelector("#entry-qr")?.replaceChildren();
@@ -1842,6 +1962,13 @@ document.addEventListener("visibilitychange", () => {
   }
   // Returning from another app must not discard an open dialog.
   if (state.committing || state.switchingUnit || modal.open) return;
+  if (
+    state.session &&
+    location.hash.startsWith("#/facility/") &&
+    hiddenAt &&
+    Date.now() - hiddenAt < KEEP_BOOKING_PLACE_MS
+  )
+    return;
   if (state.session || savedPassReady()) {
     if (location.hash !== "#/qr") location.hash = "#/qr";
     else void route();

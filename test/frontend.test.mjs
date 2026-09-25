@@ -25,6 +25,7 @@ import {
 } from "../public/activity-store.js";
 import { IDBFactory } from "fake-indexeddb";
 import { createPaymentQr } from "../public/payment-qr.js";
+import { bookingCalendar, calendarFileName } from "../public/calendar.js";
 
 const html = await readFile(
   new URL("../public/index.html", import.meta.url),
@@ -37,7 +38,7 @@ const sourceModule = await readFile(
 // jsdom evaluates the DOM controller outside its module loader. Bind the real
 // imported helpers below; the production module graph is verified separately.
 const source = sourceModule.replace(
-  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store|payment-qr|activity-store)\.js["'];\s*/gm,
+  /^import\s*\{[^}]*\}\s*from\s*["']\.\/(?:entry-pass|pass-store|payment-qr|activity-store|calendar)\.js["'];\s*/gm,
   "",
 );
 
@@ -78,6 +79,9 @@ async function fixture(t, options = {}) {
   window.entryPassFromSession = entryPassFromSession;
   window.createEntryQr = createEntryQr;
   window.createPaymentQr = createPaymentQr;
+  window.bookingCalendar = (booking, settings) =>
+    bookingCalendar(booking, { now: now(), ...settings });
+  window.calendarFileName = calendarFileName;
   window.activityScopeFromSession = activityScopeFromSession;
   window.summarizeActivity = summarizeActivity;
   const activityDatabase = options.activityDatabase || new IDBFactory();
@@ -431,10 +435,23 @@ for (const browserLive of [false, true]) {
     await f.until(() => f.query(selected), "today's ongoing slot");
     assert.equal(f.query(selected).disabled, false);
     assert.match(f.query(selected).textContent, /In progress/);
-    const ended = f.query('[data-action="slot"][data-value="demo-facility-6-2026-09-06-0"]');
+    const endedSelector = '[data-action="slot"][data-value="demo-facility-6-2026-09-06-0"]';
+    assert.equal(f.query(endedSelector), null, "ended sessions are collapsed by default");
+    const toggle = f.query('[data-action="toggle-ended-slots"]');
+    assert.match(toggle.textContent, /Show 1 ended session/);
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    // jsdom does not focus on click; do what a real tap or keypress would.
+    toggle.focus();
+    toggle.click();
+    const ended = f.query(endedSelector);
     assert.equal(ended.disabled, true);
     assert.match(ended.textContent, /Session has ended/);
+    assert.equal(f.query('[data-action="toggle-ended-slots"]').getAttribute("aria-expanded"), "true");
+    assert.equal(f.window.document.activeElement, f.query('[data-action="toggle-ended-slots"]'), "focus stays on the toggle");
+    f.query(selected).focus();
     f.query(selected).click();
+    assert.equal(f.window.document.activeElement, f.query(selected), "focus stays on the chosen time");
+    assert.ok(f.query("#booking-summary").classList.contains("has-selection"));
     assert.match(f.query("#app").textContent, /original end time and full listed price/);
     f.query("#book-submit").click();
     await f.until(() => /Confirmed · Free/.test(f.query("#modal")?.textContent), "ongoing booking confirmation");
@@ -1559,7 +1576,9 @@ test("disabled estate slots cannot be selected and rules are sanitized before di
   });
   await f.login();
   f.query('.facility-card[href="#/facility/demo-facility-1"]').click();
-  await f.until(() => f.all(".slot").length === 2, "unavailable slots");
+  await f.until(() => f.all(".slot").length === 1, "unavailable slots");
+  f.query('[data-action="toggle-ended-slots"]').click();
+  assert.equal(f.all(".slot").length, 2);
   assert.equal(f.all(".slot:not(:disabled)").length, 0);
   assert.match(
     f.query(".not-released").textContent,
@@ -1659,4 +1678,140 @@ test("an estate rejection is shown without launching profile verification", asyn
   );
   assert.equal(f.query("#profile-form"), null);
   assert.equal(f.calls.includes("createOrder"), false);
+});
+
+test("the time grid behind a booking result refreshes so the booked time is no longer offered", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  await f.login();
+  await f.chooseSlot();
+  const booked = '[data-action="slot"][data-value="demo-facility-1-2026-09-06-0"]';
+  assert.ok(f.query("#booking-summary").classList.contains("has-selection"));
+  f.query("#book-submit").click();
+  await f.until(() => f.query('[data-action="go-bookings"]'), "booking result");
+  await f.until(
+    () => f.query(booked)?.disabled && /Already booked/.test(f.query(booked).textContent),
+    "refreshed availability behind the dialog",
+  );
+  assert.equal(f.query("#modal").open, true, "the result stays open while times refresh");
+  assert.equal(f.window.location.hash, "#/facility/demo-facility-1");
+  assert.equal(f.query("#booking-summary").classList.contains("has-selection"), false);
+  assert.equal(f.writes().filter((op) => op === "insertBooking").length, 1);
+});
+
+test("a date whose sessions have all ended offers the next day", async (t) => {
+  const f = await fixture(t, { now: () => Date.parse("2026-09-05T15:00:00Z") });
+  await f.login();
+  f.query('.facility-card[href="#/facility/demo-facility-1"]').click();
+  await f.until(() => f.query('[data-action="toggle-ended-slots"]'), "collapsed ended sessions");
+  assert.equal(f.all(".slot").length, 0);
+  assert.match(f.query("#slots").textContent, /All sessions for this date have ended/);
+  assert.equal(f.query(".not-released"), null);
+  const next = f.query('#slots [data-action="date"]');
+  assert.equal(next.dataset.value, "2026-09-06");
+  assert.match(next.textContent, /See Sun/);
+  next.focus();
+  next.click();
+  await f.until(() => f.all(".slot:not(:disabled)").length === 2, "next day's times");
+  assert.equal(f.query("#booking-date").value, "2026-09-06");
+  assert.equal(f.query(".date-option.selected").dataset.value, "2026-09-06");
+  assert.equal(f.query('[data-action="toggle-ended-slots"]'), null);
+});
+
+test("briefly switching apps keeps a booking in progress; a longer absence reopens on the entry QR", async (t) => {
+  let time = Date.parse("2026-09-05T08:00:00Z");
+  const f = await fixture(t, { browserLive: true, now: () => time });
+  await f.login();
+  await f.chooseSlot();
+  let hidden = false;
+  Object.defineProperty(f.window.document, "hidden", { get: () => hidden });
+  const leaveFor = (ms) => {
+    hidden = true;
+    f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+    time += ms;
+    hidden = false;
+    f.window.document.dispatchEvent(new f.window.Event("visibilitychange"));
+  };
+  leaveFor(3 * 60_000);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(f.window.location.hash, "#/facility/demo-facility-1");
+  assert.equal(f.query(".slot.selected")?.dataset.value, "demo-facility-1-2026-09-06-0");
+  assert.equal(f.query("#booking-date").value, "2026-09-06");
+  assert.ok(f.query("#book-submit"));
+  leaveFor(11 * 60_000);
+  await f.until(() => f.query("#entry-qr svg"), "entry QR after a longer absence");
+  assert.equal(f.window.location.hash, "#/qr");
+});
+
+test("booking results and details export a calendar event and copy payment references", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  const downloads = [];
+  f.window.URL.createObjectURL = (blob) => {
+    downloads.push({ blob });
+    return "blob:https://lproperty.github.io/calendar";
+  };
+  f.window.URL.revokeObjectURL = () => {};
+  const originalClick = f.window.HTMLAnchorElement.prototype.click;
+  f.window.HTMLAnchorElement.prototype.click = function () {
+    if (!this.download) return originalClick.call(this);
+    downloads.at(-1).name = this.download;
+  };
+  const read = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new f.window.FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsText(blob);
+    });
+  const copied = [];
+  Object.defineProperty(f.window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (value) => void copied.push(value) },
+  });
+  await f.login();
+  await f.chooseSlot();
+  f.query("#book-submit").click();
+  await f.until(() => f.query('#modal [data-action="add-calendar"]'), "calendar action on the result");
+  f.query('#modal [data-action="add-calendar"]').click();
+  assert.equal(downloads.length, 1);
+  assert.equal(downloads[0].name, "sesame-jewel-function-room-1-2026-09-06.ics");
+  assert.equal(downloads[0].blob.type, "text/calendar");
+  const ics = await read(downloads[0].blob);
+  assert.match(ics, /\r\nDTSTART:20260906T010000Z\r\nDTEND:20260906T070000Z\r\n/);
+  assert.match(ics, /\r\nSUMMARY:Jewel Function Room 1\r\n/);
+  assert.match(ics, /Payment pending/);
+  assert.doesNotMatch(ics, /local-demo-token|demo-unit|#08-01|EXAMPLE-/);
+
+  const uen = f.query('#modal [data-action="copy"][data-value="EXAMPLE-UEN"]');
+  assert.equal(uen.getAttribute("aria-label"), "Copy UEN");
+  uen.click();
+  await f.until(() => uen.textContent === "Copied", "copied feedback");
+  assert.deepEqual(copied, ["EXAMPLE-UEN"]);
+
+  f.query('[data-action="go-bookings"]').click();
+  await f.until(() => f.query('.booking-row [data-action="booking-details"]'), "pending booking");
+  const bookingId = f.query('.booking-row [data-action="booking-details"]').dataset.value;
+  f.query('.booking-row [data-action="booking-details"]').click();
+  f.query('#modal [data-action="add-calendar"]').click();
+  assert.equal(downloads.length, 2);
+  assert.match(await read(downloads[1].blob), new RegExp(`UID:sesame-booking-${bookingId}`));
+  const reference = f.query(`#modal [data-action="copy"][data-value="${bookingId}"]`);
+  reference.click();
+  await f.until(() => copied.length === 2, "booking reference copied");
+  assert.equal(copied[1], bookingId);
+
+  Object.defineProperty(f.window.navigator, "clipboard", { configurable: true, value: undefined });
+  const order = f.query('#modal .inspection-details [data-action="copy"]:not([data-value="' + bookingId + '"])');
+  order.click();
+  await f.until(() => order.textContent === "Copy unavailable", "unsupported clipboard");
+  assert.deepEqual(f.consoleErrors, []);
+});
+
+test("history bookings do not offer a calendar event", async (t) => {
+  const f = await fixture(t, { browserLive: true });
+  seedHistoricalBooking(f);
+  await f.login();
+  f.window.location.hash = "#/bookings/history";
+  await f.until(() => f.query('.booking-row [data-action="booking-details"]'), "history row");
+  f.query('.booking-row [data-action="booking-details"]').click();
+  assert.equal(f.query('#modal [data-action="add-calendar"]'), null);
 });

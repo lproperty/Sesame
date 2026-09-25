@@ -18,9 +18,13 @@ The pass is encrypted in this browser. It saves the minimum entry identity, not 
 2. Choose a date and time.
 3. Tap **Book · S$price**.
 
+On iPhone and other narrow screens, the chosen time and the **Book** button stay pinned above the tab bar, so you never scroll past every slot to find them. Sessions that have already ended are tucked behind **Show N ended sessions**; when every session on a date has ended, a button opens the next day. The time list refreshes behind the booking result, so a time you just booked is no longer offered when you close it.
+
 There are no acceptance checkboxes, separate review popup, profile-completion gate, or email/password verification screens. Facility information and rules are optional reading below the booking controls. Nothing is marked accepted or verified on your behalf. If the estate API rejects a request, its error is displayed.
 
 The Book button checks the current time, price, availability and selected unit once, then submits the reservation and payment order. It prevents duplicate submissions. Paid bookings show payment instructions; zero-value bookings show that no payment is required, and **Confirmed · Free** once the estate returns a current booking. Existing bookings are in **My bookings**. If the result is uncertain, check those records before retrying.
+
+**Add to calendar** in the booking result, and in **View details** for upcoming and pending bookings, downloads a calendar event with a reminder an hour before. It opens in Apple Calendar, Google Calendar or Outlook and contains only the facility, time and booking reference. **Copy** buttons beside the UEN, bank account and booking/order references help when paying by bank transfer and sending proof of payment.
 
 Sessions that have started but have not ended can also be selected when the estate reports availability. They are labelled **In progress**; the original end time and full listed price still apply. Ended sessions remain unavailable, including if a session ends before you submit. After the estate confirms the booking, its **Entry QR** is available until the session ends. The estate can reject a late booking; live acceptance of bookings made after the start time has not been verified.
 
@@ -54,7 +58,7 @@ The browser connects directly to the estate's HTTPS API; no extra backend or loc
 
 ## iPhone
 
-Use Safari's **Share → Add to Home Screen**. The app opens on My QR and uses large touch targets and controls sized for iPhone. It needs a connection to load; an already loaded QR screen refreshes locally. All booking times are Singapore time.
+Use Safari's **Share → Add to Home Screen**. The app opens on My QR and uses large touch targets and controls sized for iPhone. If you switch to another app for less than ten minutes while choosing a booking time, Sesame keeps your facility, date and selected time instead; any other return opens on My QR. Facilities are listed as compact rows, and the sign-in form fits on screen without scrolling. It needs a connection to load; an already loaded QR screen refreshes locally. All booking times are Singapore time.
 
 ## Development
 
@@ -79,6 +83,6 @@ These settings are excluded from searchable Git source, but the website necessar
 
 Changes enter `main` through a pull request with the required `verify` check. Tests run without secrets or deployment permissions. A separate fresh runner builds the allowlisted `dist` artifact without installing npm dependencies or sharing caches, then a third job deploys it. HTTPS, restricted deployment permissions and secret scanning remain enabled. `npm run audit:publication` checks tracked public files before manual publication.
 
-The automated tests use simulated estate data and cover booking/access ownership, future and historical free-tennis cancellation, paid-booking protections, uncertain results, QR refresh cleanup, encrypted activity persistence/export, date/month handling, and the existing login/entry-pass flows. Separate authorized live checks confirmed future free-tennis cancellation and slot release, removal of one historical free-tennis record, and future-cancellation quota restoration. A read-only check confirmed the estate returns PNG booking QR images with a ten-second interval. Automated checks do not make live reservations, cancellations, payments, emails or profile changes. Physical iPhone rendering and reader acceptance remain unverified.
+The automated tests use simulated estate data and cover booking/access ownership, future and historical free-tennis cancellation, paid-booking protections, uncertain results, QR refresh cleanup, encrypted activity persistence/export, calendar export and copy buttons, ended-session and app-switch behaviour, date/month handling, and the existing login/entry-pass flows. Separate authorized live checks confirmed future free-tennis cancellation and slot release, removal of one historical free-tennis record, and future-cancellation quota restoration. A read-only check confirmed the estate returns PNG booking QR images with a ten-second interval. Automated checks do not make live reservations, cancellations, payments, emails or profile changes. Physical iPhone rendering and reader acceptance remain unverified.
 
 See [SECURITY.md](SECURITY.md) for security boundaries and [ASSETS.md](ASSETS.md) for image and QR-encoder provenance. The public source contains no personal credentials or entry QR.
