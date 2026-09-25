@@ -19,6 +19,7 @@ export const PAGE_FILES = Object.freeze([
   "pass-store.js",
   "activity-store.js",
   "payment-qr.js",
+  "calendar.js",
   "vendor/qrcode.mjs",
   "vendor/QR-LICENSE.txt",
   "styles.css",
