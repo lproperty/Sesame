@@ -501,6 +501,32 @@ test("all unavailable slot flags and elapsed sessions prevent selection", () => 
   };
   const facility = { perOrderNum: 2 };
   assert.equal(normalizeSlot(base, facility, FIXED_NOW).enabled, true);
+  for (const status of [0, "0"]) {
+    const explained = normalizeSlot(
+      { ...base, status, statusInfo: "  Closed for maintenance  " },
+      facility,
+      FIXED_NOW,
+    );
+    assert.equal(explained.reason, "Closed for maintenance");
+    assert.equal(explained.enabled, false);
+    for (const statusInfo of [undefined, null, "", " \n ", 123, {}, []]) {
+      const unavailable = normalizeSlot(
+        { ...base, status, statusInfo },
+        facility,
+        FIXED_NOW,
+      );
+      assert.equal(unavailable.reason, "Unavailable");
+      assert.equal(unavailable.enabled, false);
+    }
+  }
+  assert.equal(
+    normalizeSlot(
+      { ...base, statusInfo: "Old closure message" },
+      facility,
+      FIXED_NOW,
+    ).enabled,
+    true,
+  );
   for (const patch of [
     { status: 0 },
     { status: "0" },

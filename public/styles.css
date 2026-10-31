@@ -1432,6 +1432,14 @@ input[type="checkbox"] {
   font-size: 9px;
   color: #7d8b77;
 }
+.slot-bottom > span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.slot-bottom > span:last-child {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
 .slot:disabled {
   background: #f4f4ef;
   color: #959b8c;

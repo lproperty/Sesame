@@ -1558,13 +1558,15 @@ test("read-only frontend shows the booking summary with submission disabled", as
   assert.equal(f.query("#modal").open, false);
 });
 
-test("disabled estate slots cannot be selected and rules are sanitized before display", async (t) => {
+test("disabled slots show estate explanations as text and cannot be selected; rules are sanitized", async (t) => {
+  const explanation = 'Closed for maintenance <img src=x onerror="window.injected=1">';
   const f = await fixture(t, {
     override: async (op, body, context, demo) => {
       if (op === "availability")
         return (await demo(op, body, context)).map((s) => ({
           ...s,
           status: 0,
+          statusInfo: `  ${explanation}  `,
         }));
       if (op === "facility")
         return {
@@ -1580,6 +1582,12 @@ test("disabled estate slots cannot be selected and rules are sanitized before di
   f.query('[data-action="toggle-ended-slots"]').click();
   assert.equal(f.all(".slot").length, 2);
   assert.equal(f.all(".slot:not(:disabled)").length, 0);
+  for (const slot of f.all(".slot")) {
+    assert.equal(slot.querySelector(".slot-bottom > span").textContent, explanation);
+    assert.equal(slot.querySelector("img"), null);
+    slot.click();
+  }
+  assert.equal(f.query(".slot.selected"), null);
   assert.match(
     f.query(".not-released").textContent,
     /currently marks these times unavailable/,
