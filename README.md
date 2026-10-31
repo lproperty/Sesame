@@ -18,6 +18,8 @@ The pass is encrypted in this browser. It saves the minimum entry identity, not 
 2. Choose a date and time.
 3. Tap **Book · S$price**.
 
+Unavailable times show the estate's explanation when one is supplied, such as a maintenance closure. Otherwise they show **Unavailable**. These times remain disabled.
+
 On iPhone and other narrow screens, the chosen time and the **Book** button stay pinned above the tab bar, so you never scroll past every slot to find them. Sessions that have already ended are tucked behind **Show N ended sessions**; when every session on a date has ended, a button opens the next day. The time list refreshes behind the booking result, so a time you just booked is no longer offered when you close it.
 
 There are no acceptance checkboxes, separate review popup, profile-completion gate, or email/password verification screens. Facility information and rules are optional reading below the booking controls. Nothing is marked accepted or verified on your behalf. If the estate API rejects a request, its error is displayed.
