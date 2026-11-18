@@ -517,7 +517,6 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
   if (!identity) return;
   const { user, units, unit } = identity;
   const authenticated = Boolean(state.session);
-  const showEntry = unit?.userType !== 2;
   const active =
     section === "Entry QR"
       ? "qr"
@@ -529,9 +528,9 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
   replaceContent(
     app,
     `<div class="app-layout">
-    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="${showEntry ? "#/qr" : "#/facilities"}" aria-label="Sesame home">${brand()}</a>
+    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/qr" aria-label="Sesame home">${brand()}</a>
       <p class="nav-label">YOUR ESTATE</p>
-      <nav>${showEntry ? `<a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>` : ""}
+      <nav><a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>
       <a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
       <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a>
       <a href="#/activity" class="nav-item ${active === "activity" ? "active" : ""}" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")} Activity log</a></nav>
@@ -547,7 +546,7 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       </main>
     </div>
     <nav class="mobile-nav" aria-label="Mobile resident navigation">
-      ${showEntry ? `<a href="#/qr" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")}<span>My QR</span></a>` : ""}
+      <a href="#/qr" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")}<span>My QR</span></a>
       <a href="#/facilities" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")}<span>Facilities</span></a>
       <a href="#/bookings" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")}<span>My bookings</span></a>
       <a href="#/activity" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")}<span>Activity</span></a>
@@ -587,6 +586,13 @@ function renderEntry() {
   document.title = state.config.demo
     ? "Entry QR demo · Sesame"
     : "My entry QR · Sesame";
+  if (state.session?.unit?.userType === 2) {
+    renderShell(
+      '<section class="entry-view"><div class="entry-heading"><h1>My entry QR</h1><p>Open QR Access in the Grand Dunman Intelliving app to show your resident pass.</p></div><div class="entry-tools"><a class="text-button" href="https://apps.apple.com/sg/app/grand-dunman-intelliving/id6777463602" target="_blank" rel="noopener noreferrer">App Store</a><a class="text-button" href="https://play.google.com/store/apps/details?id=com.intelliving.granddunman" target="_blank" rel="noopener noreferrer">Google Play</a></div></section>',
+      "Entry QR",
+    );
+    return;
+  }
   let pass;
   try {
     pass = state.session
@@ -1087,10 +1093,6 @@ async function route() {
       : parts[0] === "activity"
         ? "Activity"
         : "Facilities";
-  if (entryRoute() && state.session.unit?.userType === 2) {
-    location.replace("#/facilities");
-    return;
-  }
   if (entryRoute() && state.session.unit) {
     renderEntry();
     window.scrollTo(0, 0);
@@ -1971,8 +1973,7 @@ document.addEventListener("visibilitychange", () => {
   )
     return;
   if (state.session || savedPassReady()) {
-    const home = state.session?.unit?.userType === 2 ? "#/facilities" : "#/qr";
-    if (location.hash !== home) location.hash = home;
+    if (location.hash !== "#/qr") location.hash = "#/qr";
     else void route();
   } else if (entryRoute()) void route();
 });
