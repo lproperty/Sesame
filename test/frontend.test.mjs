@@ -1823,3 +1823,39 @@ test("history bookings do not offer a calendar event", async (t) => {
   f.query('.booking-row [data-action="booking-details"]').click();
   assert.equal(f.query('#modal [data-action="add-calendar"]'), null);
 });
+
+test("resident My QR survives navigation and shows the selected unit's entry options", async (t) => {
+  const f = await fixture(t, {
+    browserLive: true,
+    initialHash: "#/qr",
+    override: async (operation, body, context, demo) => {
+      if (operation !== "units") return;
+      const units = await demo(operation, body, context);
+      return units.map((unit, index) => ({ ...unit, userType: index === 0 ? 2 : 0 }));
+    },
+  });
+  f.query("#username").value = "demo";
+  f.query("#password").value = "demo";
+  f.submit(f.query("#login-form"));
+  const residentPage = () => f.query(".entry-heading h1")?.textContent === "My entry QR";
+  await f.until(residentPage, "resident QR deep link");
+  for (const nav of [".sidebar nav", ".mobile-nav"]) {
+    assert.deepEqual(f.all(nav + " a").map(a => a.hash), ["#/qr", "#/facilities", "#/bookings", "#/activity"]);
+    assert.equal(f.query(nav + ' [aria-current="page"]').hash, "#/qr");
+  }
+  assert.equal(f.query("#entry-qr"), null);
+  f.query('.mobile-nav a[href="#/facilities"]').click();
+  await f.until(() => f.all(".facility-card").length, "resident facilities");
+  f.query('.mobile-nav a[href="#/qr"]').click();
+  await f.until(residentPage, "return to resident QR");
+  const select = (value) => {
+    f.query("#unit-select").value = value;
+    f.change(f.query("#unit-select"));
+  };
+  select("demo-unit-2");
+  await f.until(() => f.query("#entry-qr svg"), "owner QR after unit switch");
+  select("demo-unit-1");
+  await f.until(residentPage, "resident QR after switching back");
+  assert.equal(f.query("#entry-qr"), null);
+  assert.equal(f.query('[data-action="save-entry"]'), null);
+});
