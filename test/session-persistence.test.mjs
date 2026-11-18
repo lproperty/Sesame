@@ -95,6 +95,22 @@ function fixture(storage = memoryStorage()) {
   return f;
 }
 
+test("an active resident keeps the estate role on login, reload, and facility lookup", async () => {
+  const f = fixture();
+  f.override = (op) => op === "units" ? Response.json({ code: 1200, data: [
+    { projectId: "demo-project", unitId: "resident-unit", userType: "2", activation: "1", status: "0" },
+    { projectId: "demo-project", unitId: "inactive", userType: 2, activation: 0, status: 0 },
+    { projectId: "demo-project", unitId: "unknown", userType: null, activation: 1, status: 0 },
+  ] }) : undefined;
+  const initial = await f.open().login();
+  assert.deepEqual(initial.units.map(u => [u.unitId, u.userType]), [["resident-unit", 2]]);
+  const reopened = f.open();
+  assert.deepEqual((await reopened.session()).unit, initial.unit);
+  assert.equal((await reopened.request("/api/facilities")).status, 200);
+  assert.equal(f.requests.at(-1).context.userType, "2");
+  assert.equal(f.requests.at(-1).context.unitId, "resident-unit");
+});
+
 async function preview(handle) {
   const facilities = await (await handle.request("/api/facilities")).json();
   const availability = await (

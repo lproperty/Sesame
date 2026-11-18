@@ -212,6 +212,7 @@ const savedPassMatches = (session) =>
   state.savedPass?.pass.ownerId === session?.user.id &&
   session.units.some(
     (unit) =>
+      unit.userType === 0 &&
       unit.unitId === state.savedPass.pass.unit.unitId &&
       unit.projectId === state.savedPass.pass.unit.projectId,
   );
@@ -516,6 +517,7 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
   if (!identity) return;
   const { user, units, unit } = identity;
   const authenticated = Boolean(state.session);
+  const showEntry = unit?.userType !== 2;
   const active =
     section === "Entry QR"
       ? "qr"
@@ -527,17 +529,17 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
   replaceContent(
     app,
     `<div class="app-layout">
-    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="#/qr" aria-label="My resident entry QR">${brand()}</a>
+    <aside class="sidebar" aria-label="Resident navigation"><a class="brand" href="${showEntry ? "#/qr" : "#/facilities"}" aria-label="Sesame home">${brand()}</a>
       <p class="nav-label">YOUR ESTATE</p>
-      <nav><a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>
+      <nav>${showEntry ? `<a href="#/qr" class="nav-item ${active === "qr" ? "active" : ""}" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")} My entry QR</a>` : ""}
       <a href="#/facilities" class="nav-item ${active === "facilities" ? "active" : ""}" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")} Facilities ${icon("chevron", "nav-arrow")}</a>
       <a href="#/bookings" class="nav-item ${active === "bookings" ? "active" : ""}" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")} My bookings</a>
       <a href="#/activity" class="nav-item ${active === "activity" ? "active" : ""}" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")} Activity log</a></nav>
       <div class="sidebar-spacer"></div>
-      <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">${authenticated ? "Unit owner" : "Saved on this device"}</p></div><button class="icon-button" data-action="${authenticated ? "logout" : "forget-entry"}" title="${authenticated ? "Sign out" : "Forget saved pass"}" aria-label="${authenticated ? "Sign out" : "Forget saved pass"}">${icon("logout")}</button></div>
+      <div class="sidebar-bottom"><span class="avatar" aria-hidden="true">${esc(user.name.slice(0, 1).toUpperCase())}</span><div><p class="account-name">${esc(user.name)}</p><p class="account-role">${authenticated ? (unit?.userType === 2 ? "Resident" : "Unit owner") : "Saved on this device"}</p></div><button class="icon-button" data-action="${authenticated ? "logout" : "forget-entry"}" title="${authenticated ? "Sign out" : "Forget saved pass"}" aria-label="${authenticated ? "Sign out" : "Forget saved pass"}">${icon("logout")}</button></div>
     </aside>
     <div class="workspace"><header class="topbar"><div class="topbar-crumb"><span>Resident services</span><span class="crumb-divider">/</span><span class="current">${esc(section)}</span></div>
-      <div class="topbar-actions"><span class="property-tag">Resident portal</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active owner unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
+      <div class="topbar-actions"><span class="property-tag">Resident portal</span><label class="unit-control">${icon("home")}<span><small>YOUR UNIT</small><select id="unit-select" aria-label="Active unit" ${units.length < 2 ? "disabled" : ""}>${units.length ? units.map((u) => `<option value="${esc(u.unitId)}" ${u.unitId === unit?.unitId ? "selected" : ""}>${esc(unitLabel(u))}</option>`).join("") : "<option>No active unit</option>"}</select></span></label></div></header>
       ${state.config.staticDemo ? '<div class="mode-banner"><strong>PUBLIC DEMO</strong><span>Sample data only. No real bookings or payments.</span></div>' : state.config.demo ? '<div class="mode-banner"><strong>DEMO</strong> An offline preview. All bookings here are simulated.</div>' : state.config.readOnly ? '<div class="mode-banner readonly">Read-only mode · Explore facilities and availability. Submissions are disabled.</div>' : ""}
       ${state.config.browserClient && state.session?.loginPersistence === "memory" ? '<div class="mode-banner readonly">This browser could not save your sign-in. It works in this tab, but reopening may require login. Allow storage for this site to stay signed in.</div>' : ""}
       <main class="page${active === "qr" ? " entry-page" : ""}" id="main-content" tabindex="-1">${content}
@@ -545,7 +547,7 @@ function renderShell(content, section = "Facilities", cachedPass = null) {
       </main>
     </div>
     <nav class="mobile-nav" aria-label="Mobile resident navigation">
-      <a href="#/qr" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")}<span>My QR</span></a>
+      ${showEntry ? `<a href="#/qr" ${active === "qr" ? 'aria-current="page"' : ""}>${icon("qr")}<span>My QR</span></a>` : ""}
       <a href="#/facilities" ${active === "facilities" ? 'aria-current="page"' : ""}>${icon("grid")}<span>Facilities</span></a>
       <a href="#/bookings" ${active === "bookings" ? 'aria-current="page"' : ""}>${icon("calendarCheck")}<span>My bookings</span></a>
       <a href="#/activity" ${active === "activity" ? 'aria-current="page"' : ""}>${icon("clock")}<span>Activity</span></a>
@@ -1085,7 +1087,11 @@ async function route() {
       : parts[0] === "activity"
         ? "Activity"
         : "Facilities";
-  if (entryRoute()) {
+  if (entryRoute() && state.session.unit?.userType === 2) {
+    location.replace("#/facilities");
+    return;
+  }
+  if (entryRoute() && state.session.unit) {
     renderEntry();
     window.scrollTo(0, 0);
     return;
@@ -1094,7 +1100,7 @@ async function route() {
     renderShell(
       '<section class="empty-state"><div class="empty-icon">' +
         icon("home") +
-        '</div><h2>No active owner unit.</h2><p>This login does not have an activated owner association. Please contact estate management to link your unit.</p><button class="button" data-action="logout">Sign out</button></section>',
+        '</div><h2>No active unit.</h2><p>Sign out and sign in again to refresh your units. If your unit is still missing, check its activation with estate management.</p><button class="button" data-action="logout">Sign out</button></section>',
     );
     return;
   }
@@ -1598,12 +1604,7 @@ document.addEventListener("submit", async (event) => {
       body.cipher = "";
       if (!state.config.demo && savedPassReady()) {
         const saved = state.savedPass.pass;
-        const allowed = state.session.units.some(
-          (unit) =>
-            unit.unitId === saved.unit.unitId &&
-            unit.projectId === saved.unit.projectId,
-        );
-        if (saved.ownerId !== state.session.user.id || !allowed)
+        if (!savedPassMatches(state.session))
           await forgetEntry();
         else if (state.session.unit?.unitId !== saved.unit.unitId)
           state.session = await api("/api/unit", { unitId: saved.unit.unitId });
@@ -1970,7 +1971,8 @@ document.addEventListener("visibilitychange", () => {
   )
     return;
   if (state.session || savedPassReady()) {
-    if (location.hash !== "#/qr") location.hash = "#/qr";
+    const home = state.session?.unit?.userType === 2 ? "#/facilities" : "#/qr";
+    if (location.hash !== home) location.hash = home;
     else void route();
   } else if (entryRoute()) void route();
 });
