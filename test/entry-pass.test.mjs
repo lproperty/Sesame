@@ -84,6 +84,13 @@ test("entry identity must belong to the signed-in activated owner associations",
   assert.equal(JSON.stringify(clean).includes("private"), false);
 });
 
+test("resident-role associations generate the same native QR payload", () => {
+  const resident = { ...unit, userType: 2 };
+  const residentPass = entryPassFromSession({ ...session, unit: resident, units: [resident] });
+  assert.equal(decodeSvg(createEntryQr(residentPass, now).svg).data, entryPayload(pass, now));
+  assert.throws(() => entryPassFromSession({ ...session, unit: resident, units: [] }));
+});
+
 async function raw(database, change) {
   const db = await new Promise((resolve, reject) => {
     const request = database.open(PASS_DATABASE, 1);

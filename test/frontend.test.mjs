@@ -1824,7 +1824,7 @@ test("history bookings do not offer a calendar event", async (t) => {
   assert.equal(f.query('#modal [data-action="add-calendar"]'), null);
 });
 
-test("resident My QR survives navigation and shows the selected unit's entry options", async (t) => {
+test("resident My QR survives navigation and renders the selected unit's QR", async (t) => {
   const f = await fixture(t, {
     browserLive: true,
     initialHash: "#/qr",
@@ -1837,14 +1837,14 @@ test("resident My QR survives navigation and shows the selected unit's entry opt
   f.query("#username").value = "demo";
   f.query("#password").value = "demo";
   f.submit(f.query("#login-form"));
-  const residentPage = () => f.query(".entry-heading h1")?.textContent === "My entry QR";
+  const residentPage = () => Boolean(f.query("#entry-qr svg"));
   await f.until(residentPage, "resident QR deep link");
   assert.equal(f.query(".entry-view a"), null);
   for (const nav of [".sidebar nav", ".mobile-nav"]) {
     assert.deepEqual(f.all(nav + " a").map(a => a.hash), ["#/qr", "#/facilities", "#/bookings", "#/activity"]);
     assert.equal(f.query(nav + ' [aria-current="page"]').hash, "#/qr");
   }
-  assert.equal(f.query("#entry-qr"), null);
+  assert.ok(f.query("#entry-qr svg"));
   f.query('.mobile-nav a[href="#/facilities"]').click();
   await f.until(() => f.all(".facility-card").length, "resident facilities");
   f.query('.mobile-nav a[href="#/qr"]').click();
@@ -1857,6 +1857,6 @@ test("resident My QR survives navigation and shows the selected unit's entry opt
   await f.until(() => f.query("#entry-qr svg"), "owner QR after unit switch");
   select("demo-unit-1");
   await f.until(residentPage, "resident QR after switching back");
-  assert.equal(f.query("#entry-qr"), null);
-  assert.equal(f.query('[data-action="save-entry"]'), null);
+  assert.ok(f.query("#entry-qr svg"));
+  assert.ok(f.query('[data-action="save-entry"]'));
 });
