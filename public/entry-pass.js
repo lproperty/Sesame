@@ -29,11 +29,11 @@ export function entryPassFromSession(session) {
     (candidate) =>
       candidate.unitId === session.unit?.unitId &&
       candidate.projectId === session.unit?.projectId &&
-      candidate.userType === 0,
+      (candidate.userType === 0 || candidate.userType === 2),
   );
   if (!session?.user?.id || !unit)
     throw new Error(
-      "Sign in with an activated owner unit to show your entry QR.",
+      "Sign in with an activated resident unit to show your entry QR.",
     );
   return normalizeEntryPass({ ownerId: session.user.id, unit });
 }

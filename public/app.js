@@ -586,13 +586,6 @@ function renderEntry() {
   document.title = state.config.demo
     ? "Entry QR demo · Sesame"
     : "My entry QR · Sesame";
-  if (state.session?.unit?.userType === 2) {
-    renderShell(
-      '<section class="entry-view"><div class="entry-heading"><h1>My entry QR</h1><p>Open QR Access in the Grand Dunman Intelliving app to show your resident pass.</p></div></section>',
-      "Entry QR",
-    );
-    return;
-  }
   let pass;
   try {
     pass = state.session
