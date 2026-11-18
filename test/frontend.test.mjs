@@ -1839,6 +1839,7 @@ test("resident My QR survives navigation and shows the selected unit's entry opt
   f.submit(f.query("#login-form"));
   const residentPage = () => f.query(".entry-heading h1")?.textContent === "My entry QR";
   await f.until(residentPage, "resident QR deep link");
+  assert.equal(f.query(".entry-view a"), null);
   for (const nav of [".sidebar nav", ".mobile-nav"]) {
     assert.deepEqual(f.all(nav + " a").map(a => a.hash), ["#/qr", "#/facilities", "#/bookings", "#/activity"]);
     assert.equal(f.query(nav + ' [aria-current="page"]').hash, "#/qr");
