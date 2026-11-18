@@ -169,8 +169,7 @@ export function createLiveRequest({
       record.signedOut ||
       record.version !== (legacy ? 1 : 2) ||
       !Array.isArray(record.units) ||
-      record.units.length > 100 ||
-      record.units.some((unit) => unit?.userType !== 0)
+      record.units.length > 100
     )
       throw new Error("Invalid saved session.");
     const units = record.units.map(normalizeUnit);

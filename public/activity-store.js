@@ -35,7 +35,7 @@ export function activityScopeFromSession(session) {
     (candidate) =>
       candidate.unitId === session.unit?.unitId &&
       candidate.projectId === session.unit?.projectId &&
-      candidate.userType === 0,
+      (candidate.userType === 0 || candidate.userType === 2),
   );
   if (!session?.user?.id || !unit)
     throw new Error("Sign in with your owner unit to view its local activity.");
