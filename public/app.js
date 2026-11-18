@@ -588,7 +588,7 @@ function renderEntry() {
     : "My entry QR · Sesame";
   if (state.session?.unit?.userType === 2) {
     renderShell(
-      '<section class="entry-view"><div class="entry-heading"><h1>My entry QR</h1><p>Open QR Access in the Grand Dunman Intelliving app to show your resident pass.</p></div><div class="entry-tools"><a class="text-button" href="https://apps.apple.com/sg/app/grand-dunman-intelliving/id6777463602" target="_blank" rel="noopener noreferrer">App Store</a><a class="text-button" href="https://play.google.com/store/apps/details?id=com.intelliving.granddunman" target="_blank" rel="noopener noreferrer">Google Play</a></div></section>',
+      '<section class="entry-view"><div class="entry-heading"><h1>My entry QR</h1><p>Open QR Access in the Grand Dunman Intelliving app to show your resident pass.</p></div></section>',
       "Entry QR",
     );
     return;
