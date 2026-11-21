@@ -212,7 +212,7 @@ const savedPassMatches = (session) =>
   state.savedPass?.pass.ownerId === session?.user.id &&
   session.units.some(
     (unit) =>
-      unit.userType === 0 &&
+      (unit.userType === 0 || unit.userType === 2) &&
       unit.unitId === state.savedPass.pass.unit.unitId &&
       unit.projectId === state.savedPass.pass.unit.projectId,
   );

@@ -1858,5 +1858,11 @@ test("resident My QR survives navigation and renders the selected unit's QR", as
   select("demo-unit-1");
   await f.until(residentPage, "resident QR after switching back");
   assert.ok(f.query("#entry-qr svg"));
-  assert.ok(f.query('[data-action="save-entry"]'));
+  f.query('[data-action="save-entry"]').click();
+  await f.until(() => f.query(".entry-saved"), "resident pass saved");
+  // The 10s refresh re-checks the session; a resident pass must survive it.
+  f.query('[data-action="refresh-entry"]').click();
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.ok(f.query(".entry-saved"));
+  assert.notEqual(await f.readSavedPass(), null);
 });
